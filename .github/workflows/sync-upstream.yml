@@ -17,18 +17,26 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Sync from upstream
+      - name: Sync from upstream and preserve workflow
         shell: bash
         run: |
           set -euo pipefail
+          WORKFLOW_BACKUP="$(mktemp)"
+          cp .github/workflows/sync-upstream.yml "$WORKFLOW_BACKUP"
           git remote add upstream https://github.com/shanmiteko/LotteryAutoScript.git || true
           git fetch --prune upstream main
           LOCAL=$(git rev-parse HEAD)
           UPSTREAM=$(git rev-parse upstream/main)
           if [ "$LOCAL" = "$UPSTREAM" ]; then
             echo "No upstream update: $LOCAL"
+            rm -f "$WORKFLOW_BACKUP"
             exit 0
           fi
           git reset --hard upstream/main
+          mkdir -p .github/workflows
+          cp "$WORKFLOW_BACKUP" .github/workflows/sync-upstream.yml
+          rm -f "$WORKFLOW_BACKUP"
+          git add .github/workflows/sync-upstream.yml
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "chore: preserve daily sync workflow" || true
           git push origin HEAD:main --force
           echo "Synced $LOCAL -> $UPSTREAM"
