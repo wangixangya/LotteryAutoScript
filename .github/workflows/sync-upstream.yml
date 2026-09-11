@@ -1,0 +1,34 @@
+name: Sync upstream daily
+
+on:
+  schedule:
+    - cron: '15 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mirror
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Sync from upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/shanmiteko/LotteryAutoScript.git || true
+          git fetch --prune upstream main
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/main)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "No upstream update: $LOCAL"
+            exit 0
+          fi
+          git reset --hard upstream/main
+          git push origin HEAD:main --force
+          echo "Synced $LOCAL -> $UPSTREAM"
