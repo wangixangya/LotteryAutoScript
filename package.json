@@ -1,12 +1,13 @@
 {
   "name": "lottery-auto-script",
-  "version": "2.11.2",
+  "version": "2.11.3",
   "description": "自动参与B站动态抽奖",
   "main": "main.js",
   "scripts": {
     "login": "node main.js login",
     "start": "node main.js start",
     "test": "node test/index.js",
+    "test:offline": "node test/offline/bili-api.js",
     "clear": "node main.js clear",
     "check": "node main.js check",
     "update": "node main.js update",
