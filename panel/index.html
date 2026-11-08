@@ -340,13 +340,26 @@ tr:last-child td{border-bottom:0}
       </div>
       <div class="card">
         <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">维护</h3>
+          <button class="btn sm" id="mtBtn">一键清理</button>
+        </div>
+        <div class="sub">悬空镜像层、超过保留数的备份（配置 20 / 快照 12）、超过 2 MB 的日志只留最后 2000 行</div>
+        <pre id="mtOut" style="display:none;margin-top:8px;max-height:180px"></pre>
+      </div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
           <h3 style="margin:0">通知渠道</h3>
           <div class="row" style="gap:6px">
             <button class="btn sm" id="ntAll">全部测试</button>
             <button class="btn sm primary" id="ntSave">保存通知设置</button>
           </div>
         </div>
-        <div class="sub" id="ntMsg" style="margin:6px 0">勾选要用的渠道，填参数后保存；密码类留空表示不修改</div>
+        <div class="row" style="gap:10px;margin:6px 0">
+          <label class="sub" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="ntSummary"> 每轮跑完推摘要（退出码 / 增量 / 待参与 / 中奖数）
+          </label>
+          <span class="sub" id="ntMsg"></span>
+        </div>
         <div id="ntBody"><div class="sub">加载中…</div></div>
       </div>
       <div class="card">
@@ -785,6 +798,7 @@ $('#pwBtn').onclick=async()=>{
 };
 async function loadNotify(){
   const d=await api('/panel/notify');
+  const sm=$('#ntSummary'); if(sm) sm.checked=!!d.summary;
   $('#ntBody').innerHTML=(d.channels||[]).map(c=>`
     <div class="chk" style="align-items:center;border-bottom:1px solid #f2f2f2;padding:8px 0">
       <input type="checkbox" data-nch="${c.key}" ${c.enabled?'checked':''}>
@@ -814,6 +828,17 @@ $('#ntSave').onclick=async()=>{
   const r=await post('/panel/notify',{channels:ch});
   $('#ntMsg').textContent = r.ok? ('✓ '+r.msg+'（已启用 '+r.enabledCount+' 个）') : ('✗ '+(r.error||'失败'));
   if(r.ok) loadNotify();
+};
+$('#ntSummary').onchange=async()=>{
+  const r=await post('/panel/summary',{enabled:$('#ntSummary').checked});
+  $('#ntMsg').textContent = (r.ok?'✓ ':'✗ ')+(r.msg||r.error||'');
+};
+$('#mtBtn').onclick=async()=>{
+  if(!confirm('清理悬空镜像 / 旧备份 / 超大日志？镜像清理不会影响正在运行的容器。')) return;
+  $('#mtBtn').disabled=true; $('#mtOut').style.display=''; $('#mtOut').textContent='清理中…';
+  const r=await post('/panel/maintain',{confirm:true});
+  $('#mtOut').textContent = r.ok? (r.msg+'\n\n'+r.images+'\n\n'+r.freed) : ('失败：'+(r.error||''));
+  $('#mtBtn').disabled=false; loadSet();
 };
 $('#ntAll').onclick=async()=>{
   const keys=[...document.querySelectorAll('[data-nch]')].filter(c=>c.checked).map(c=>c.dataset.nch);

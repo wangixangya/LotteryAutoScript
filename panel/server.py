@@ -24,6 +24,14 @@ NODE_IMAGE = "node:lts-alpine"
 VERSION = "2.2.0"
 
 SESSIONS = {}
+
+
+def _sessions_prune():
+    now = time.time()
+    with _LOCK:
+        dead = [k for k, v in SESSIONS.items() if v < now]
+        for k in dead:
+            SESSIONS.pop(k, None)
 _LOCK = threading.Lock()
 START_TS = time.time()
 
@@ -270,6 +278,13 @@ def _normalize_time(text):
 
 
 _WIN_CACHE = {"key": None, "val": None}
+
+
+def winners_readonly():
+    try:
+        return winners()
+    except Exception:
+        return []
 
 
 def winners():
@@ -535,6 +550,46 @@ def cfg_apply(changes):
     os.replace(tmp, path)
     return True, "已保存：" + "、".join(done) + "（下一轮生效）", ""
 
+def _trim(paths, keep):
+    """保留最新 keep 个，返回删除数。"""
+    files = sorted([p for p in paths if os.path.exists(p)], key=lambda p: os.path.getmtime(p), reverse=True)
+    n = 0
+    for p in files[keep:]:
+        try:
+            os.remove(p)
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def maintain():
+    """清理：悬空镜像 / 旧备份 / 超大日志。"""
+    out = {"images": "", "backups": 0, "logs": 0, "freed": ""}
+    out["images"] = shq(["docker", "image", "prune", "-f"], 120)[-200:]
+    out["images"] += " | builder: " + shq(["docker", "builder", "prune", "-f", "--filter", "until=336h"], 120)[-120:]
+    bdir = os.path.join(LOTTERY, "backups")
+    out["backups"] = _trim(glob.glob(os.path.join(bdir, "*.tar.gz")), 12)
+    out["backups"] += _trim(glob.glob(os.path.join(LOTTERY, "my_config.js.bak.*")), 20)
+    for f in glob.glob(os.path.join(LOTTERY, "logs", "*.log")) + glob.glob("/var/log/lottery-*.log"):
+        try:
+            if os.path.getsize(f) > 2_000_000:
+                with open(f, "r+", encoding="utf-8", errors="ignore") as fh:
+                    lines = fh.readlines()[-2000:]
+                    fh.seek(0)
+                    fh.truncate()
+                    fh.writelines(lines)
+                out["logs"] += 1
+        except Exception:
+            pass
+    try:
+        out["freed"] = shq(["docker", "system", "df"], 60).replace("\n", " ")[-160:]
+    except Exception:
+        pass
+    return out
+
+
+
 # ---------- 通知渠道 ----------
 NOTIFY = os.path.join(LOTTERY, "panel-notify.json")
 
@@ -604,7 +659,8 @@ def notify_view():
             hint = "走本机 napcat（127.0.0.1:3000）"
         out.append({"key": ch["key"], "name": ch["name"], "enabled": bool(cur.get("enabled")),
                     "fields": fields, "hint": hint})
-    return {"channels": out, "enabledCount": sum(1 for c in out if c["enabled"])}
+    return {"channels": out, "enabledCount": sum(1 for c in out if c["enabled"]),
+            "summary": bool(conf.get("summary", {}).get("enabled"))}
 
 
 def _send_one(key, conf, msg):
@@ -742,6 +798,16 @@ def alert_tick():
         msg = f"【B站抽奖】连续 {s0['failStreak']} 轮异常退出\n退出码: {st.get('exitCode')}\n时间: {st.get('finishedAt')}\n建议到面板「运行 → 一键体检」看看"
     elif s0["zeroStreak"] >= 2:
         msg = f"【B站抽奖】连续 {s0['zeroStreak']} 轮没有新增参与\n动态ID总数: {ids}\n时间: {st.get('finishedAt')}\n可能是风控/关键词太窄/Cookie 失效，建议体检"
+    # 每轮跑完推摘要（可在设置页开关）
+    conf = notify_conf()
+    if conf.get("summary", {}).get("enabled") and ok:
+        info = lottery_info_counts()
+        pend = sum(v for v in info.values() if isinstance(v, int))
+        summ = (f"【B站抽奖】本轮完成\n退出码 {st.get('exitCode')} · 耗时 {st.get('startedAt','')[11:19]}→{st.get('finishedAt','')[11:19]}\n"
+                f"动态ID总数 {ids}（本轮 +{max(0, ids - (prev_ids or ids))}）\n待参与抽奖 {pend} 条 · 已知中奖 {len(winners_readonly())} 条")
+        rr = send_notify(summ)
+        s0["summaryAt"] = time.time()
+        s0["summaryResult"] = ";".join(f"{r['name']}:{'ok' if r['ok'] else 'fail'}" for r in rr)
     if msg:
         last = float(s0.get("notifiedAt") or 0)
         if time.time() - last > 6 * 3600:
@@ -809,6 +875,8 @@ def _cron_next(expr, base=None):
 def _next_runs(entries):
     out = []
     for e in entries:
+        if "lottery-watchdog" in e["cmd"] or "curl -sf" in e["cmd"]:
+            continue          # 看门狗不算抽奖排班
         ts = _cron_next(e["cron"])
         if ts:
             out.append({"cron": e["cron"], "cmd": e["cmd"], "next": ts,
@@ -853,6 +921,8 @@ def checkup():
     ids = dyid_list()
     if not ids:
         items.append({"name": "动态 ID 库", "level": "warn", "text": "空", "hint": "首轮会自行建立"})
+    if password() in ("admin", "admin1", "123456", ""):
+        items.append({"name": "面板密码", "level": "warn", "text": "仍是默认密码", "hint": "设置页「安全」里改一个"})
     txt = rd(os.path.join(LOTTERY, "my_config.js"))
     if not txt.strip():
         items.append({"name": "my_config.js", "level": "fail", "text": "缺失或为空", "hint": "用源码模式恢复配置"})
@@ -876,6 +946,11 @@ QR = os.path.join(LOTTERY, "bilibili-login-qr.png")
 def audit(ip, action, extra=""):
     try:
         os.makedirs(os.path.dirname(AUDIT), exist_ok=True)
+        try:
+            if os.path.getsize(AUDIT) > 1_000_000:
+                os.replace(AUDIT, AUDIT + ".1")
+        except Exception:
+            pass
         with open(AUDIT, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{ip}\t{action}\t{extra}\n")
     except Exception:
@@ -942,6 +1017,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False))
 
     def authed(self):
+        _sessions_prune()
         m = re.search(r"sid=([0-9a-f]+)", self.headers.get("Cookie") or "")
         if not m:
             return False
@@ -1136,6 +1212,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 conf[k] = cur
             notify_save(conf)
             return self.j(200, {"ok": True, "msg": "通知设置已保存", **notify_view()})
+        if p == "/panel/maintain":
+            if not d.get("confirm"):
+                return self.j(400, {"error": "需要 confirm"})
+            m = maintain()
+            return self.j(200, {"ok": True, "msg": f"已清理：镜像悬空层、备份 {m['backups']} 个、日志 {m['logs']} 个",
+                                **m})
+        if p == "/panel/summary":
+            conf = notify_conf()
+            conf.setdefault("summary", {})["enabled"] = bool(d.get("enabled"))
+            notify_save(conf)
+            return self.j(200, {"ok": True, "msg": "已" + ("开启" if d.get("enabled") else "关闭") + "每轮摘要推送"})
         if p == "/panel/notify/test":
             key = d.get("key")
             res = send_notify(f"【B站抽奖】通知测试 · {time.strftime('%m-%d %H:%M')} · 面板 v{VERSION}", only=key)
