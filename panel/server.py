@@ -949,8 +949,6 @@ def checkup():
     ids = dyid_list()
     if not ids:
         items.append({"name": "动态 ID 库", "level": "warn", "text": "空", "hint": "首轮会自行建立"})
-    if password() in ("admin", "admin1", "123456", ""):
-        items.append({"name": "面板密码", "level": "warn", "text": "仍是默认密码", "hint": "设置页「安全」里改一个"})
     txt = rd(os.path.join(LOTTERY, "my_config.js"))
     if not txt.strip():
         items.append({"name": "my_config.js", "level": "fail", "text": "缺失或为空", "hint": "用源码模式恢复配置"})
