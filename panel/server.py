@@ -16,14 +16,36 @@ LOTTERY = os.environ.get("LOTTERY_DIR", "/app/lottery")                # 容器�
 LOTTERY_HOST = os.environ.get("LOTTERY_HOST", "/root/lottery-docker")  # docker -v 必须用宿主路径
 CROND = os.environ.get("CROND_DIR", "/etc/cron.d")
 CRON_FILE = os.path.join(CROND, "lottery-panel")
-CONF = os.path.join(BASE, "panel.conf")
+CONF = os.path.join(LOTTERY, "panel.conf")          # 持久化在挂载目录，重建不丢
+LEGACY_CONF = os.path.join(BASE, "panel.conf")      # 老位置，只读兜底
 STATS = os.path.join(LOTTERY, "panel-stats.json")
 HOST_ROOT = os.environ.get("HOST_ROOT", "/host")   # 宿主根目录只读挂载，用于读主机名/发行版/磁盘
 CONTAINER = "lottery-auto-script"
 NODE_IMAGE = "node:lts-alpine"
 VERSION = "2.2.0"
 
+SEC_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
+}
+
 SESSIONS = {}
+
+
+def _summary_text():
+    st = docker_state()
+    ids = len(dyid_list())
+    info = lottery_info_counts()
+    pend = sum(v for v in info.values() if isinstance(v, int))
+    al = _alert_state()
+    prev = al.get("lastDyids")
+    grow = max(0, ids - prev) if isinstance(prev, int) else 0
+    return (f"【B站抽奖】本轮完成\n"
+            f"退出码 {st.get('exitCode')} · 耗时 {(st.get('startedAt') or '')[11:19]}→{(st.get('finishedAt') or '')[11:19]}\n"
+            f"动态ID总数 {ids}（本轮 +{grow}）\n"
+            f"待参与抽奖 {pend} 条 · 已知中奖 {len(winners_readonly())} 条")
 
 
 def _sessions_prune():
@@ -104,12 +126,13 @@ def shq(args, timeout=60, cwd=None):
 
 
 def password():
-    m = re.search(r"^PANEL_PASSWORD=(.*)$", rd(CONF), re.M)
+    txt = rd(CONF) if os.path.exists(CONF) else rd(LEGACY_CONF)
+    m = re.search(r"^PANEL_PASSWORD=(.*)$", txt, re.M)
     return (m.group(1).strip() if m else "admin") or "admin"
 
 
 def set_password(new):
-    txt = rd(CONF, "PANEL_PASSWORD=admin\n")
+    txt = rd(CONF) if os.path.exists(CONF) else rd(LEGACY_CONF, "PANEL_PASSWORD=admin\n")
     if re.search(r"^PANEL_PASSWORD=", txt, re.M):
         txt = re.sub(r"^PANEL_PASSWORD=.*$", f"PANEL_PASSWORD={new}", txt, flags=re.M)
     else:
@@ -1003,6 +1026,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        for k, v in SEC_HEADERS.items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         for k, v in (extra or []):
@@ -1218,6 +1243,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             m = maintain()
             return self.j(200, {"ok": True, "msg": f"已清理：镜像悬空层、备份 {m['backups']} 个、日志 {m['logs']} 个",
                                 **m})
+        if p == "/panel/summary/preview":
+            rr = send_notify(_summary_text())
+            if not rr:
+                return self.j(200, {"ok": False, "error": "没有启用的通知渠道"})
+            ok = any(r["ok"] for r in rr)
+            detail = "; ".join(f"{r['name']}:{'ok' if r['ok'] else 'fail'}" for r in rr)
+            return self.j(200, {"ok": ok, "msg": ("摘要已发送 —— " + detail) if ok else ("发送失败 —— " + detail),
+                                "text": _summary_text()})
         if p == "/panel/summary":
             conf = notify_conf()
             conf.setdefault("summary", {})["enabled"] = bool(d.get("enabled"))
@@ -1358,9 +1391,36 @@ def sampler():
         time.sleep(60)
 
 
+def _ensure_cert():
+    """生成自签证书（10 年），供 HTTPS 端口用。"""
+    crt = os.path.join(LOTTERY, "panel.crt")
+    key = os.path.join(LOTTERY, "panel.key")
+    if os.path.exists(crt) and os.path.exists(key):
+        return crt, key
+    try:
+        shq(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650",
+             "-subj", "/CN=lottery-panel", "-keyout", key, "-out", crt], 60)
+    except Exception:
+        pass
+    return (crt, key) if os.path.exists(crt) else (None, None)
+
+
 if __name__ == "__main__":
     threading.Thread(target=sampler, daemon=True).start()
     port = int(os.environ.get("PANEL_PORT", "5311"))
     srv = Server(("0.0.0.0", port), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
     print(f"LotteryAutoScript 控制台 {VERSION} → http://0.0.0.0:{port}", flush=True)
-    srv.serve_forever()
+
+    tls_port = int(os.environ.get("PANEL_TLS_PORT", "5312"))
+    crt, key = _ensure_cert()
+    if crt:
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(crt, key)
+        tsrv = Server(("0.0.0.0", tls_port), Handler)
+        tsrv.socket = ctx.wrap_socket(tsrv.socket, server_side=True)
+        print(f"HTTPS 已启用 → https://0.0.0.0:{tls_port}", flush=True)
+        tsrv.serve_forever()
+    else:
+        srv.serve_forever()
