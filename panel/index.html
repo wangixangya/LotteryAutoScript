@@ -330,7 +330,9 @@ tr:last-child td{border-bottom:0}
       </div>
       <div class="card">
         <h3>备份 / 恢复</h3>
-        <div class="row"><button class="btn primary" id="bkBtn">立即备份配置</button><span class="sub" id="bkMsg"></span></div>
+        <div class="row"><button class="btn primary" id="bkBtn">备份配置</button>
+          <button class="btn" id="bkDataBtn">备份数据（dyid + 抽奖信息）</button>
+          <span class="sub" id="bkMsg"></span></div>
         <table style="margin-top:10px"><tbody id="bkTb"></tbody></table>
       </div>
       <div class="card">
@@ -763,7 +765,9 @@ $('#pwBtn').onclick=async()=>{
 $('#notifyBtn').onclick=async()=>{ const r=await post('/panel/notify-test'); $('#opsMsg').textContent=r.ok?('✓ '+r.msg):('✗ '+r.error); };
 $('#suBtn').onclick=async()=>{ if(!confirm('重建面板会 build 新镜像并替换容器，约 30–60 秒不可用，继续？')) return;
   const r=await post('/panel/selfupdate'); $('#opsMsg').textContent=r.msg||r.error; };
-$('#bkBtn').onclick=async()=>{ const r=await post('/panel/backup'); $('#bkMsg').textContent=r.ok?('✓ '+r.msg):('✗ 失败'); loadSet(); };
+$('#bkBtn').onclick=async()=>{ const r=await post('/panel/backup',{what:'config'}); $('#bkMsg').textContent=r.ok?('✓ '+r.msg):('✗ 失败'); loadSet(); };
+$('#bkDataBtn').onclick=async()=>{ if(!confirm('打包 data/ 目录（dyid + lottery_info，约 125 KB）？')) return;
+  const r=await post('/panel/backup',{what:'data'}); $('#bkMsg').textContent=r.ok?('✓ '+r.msg):('✗ 失败'); loadSet(); };
 
 function wire(sel,path,body){ $(sel).onclick=async()=>{ const r=await post(path,body||{}); $('#runMsg').textContent=r.msg||r.error||''; loadDash(); }; }
 wire('#runBtn','/panel/run'); wire('#stopBtn','/panel/stop'); wire('#syncBtn','/panel/sync');

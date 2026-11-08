@@ -260,6 +260,15 @@ def parse_run_log():
     return runs, skips
 
 
+def _normalize_time(text):
+    """把 '11/5/2026, 6:43:00 AM' 这类美式时间转成 '2026-11-05 06:43'。"""
+    def rep(m):
+        mo, d, y, hh, mm, ss, ap = m.groups()
+        h = int(hh) % 12 + (12 if ap.upper() == "PM" else 0)
+        return f"{y}-{int(mo):02d}-{int(d):02d} {h:02d}:{int(mm):02d}"
+    return re.sub(r"(\d{1,2})/(\d{1,2})/(\d{4}),?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)", rep, text)
+
+
 def winners():
     txt = rd(os.path.join(LOTTERY, "logs/winner-check.log"))
     out, seen = [], set()
@@ -270,7 +279,8 @@ def winners():
             continue
         if ("可能中奖" in tag) or ("可能中奖" in msg) or ("中奖了" in msg) or ("恭喜" in msg):
             seen.add(key)
-            out.append({"time": f"{date} {tm}", "level": lvl, "tag": tag, "msg": msg[:120]})
+            msg = _normalize_time(msg)
+            out.append({"time": f"{date} {tm}", "level": lvl, "tag": tag, "msg": msg[:160]})
     return out[-60:]
 
 
@@ -522,6 +532,62 @@ def cfg_apply(changes):
     os.replace(tmp, path)
     return True, "已保存：" + "、".join(done) + "（下一轮生效）", ""
 
+# ---------- 连续失败 / 零增长告警 ----------
+ALERT = os.path.join(LOTTERY, "panel-alert.json")
+
+
+def _alert_state():
+    try:
+        return json.loads(rd(ALERT) or "{}")
+    except Exception:
+        return {}
+
+
+def _qq_send(msg):
+    sender = os.environ.get("QQ_SEND_SCRIPT", "/hscripts/qq_ws_send.py")
+    if not os.path.exists(sender):
+        return False, "缺少 " + sender
+    out = shq(["python3", sender, msg], 60)
+    return "OK" in out, out[-200:]
+
+
+def alert_tick():
+    """每轮跑完检查一次：连续 2 轮失败 / 连续 2 轮 dyid 零增长 → 推 QQ（6 小时冷却）。"""
+    st = docker_state()
+    if not st.get("exists") or st.get("running"):
+        return None
+    key = f"{st.get('startedAt')}|{st.get('finishedAt')}"
+    s0 = _alert_state()
+    if s0.get("lastKey") == key:
+        return None
+    ids = len(dyid_list())
+    prev_ids = s0.get("lastDyids")
+    ok = (st.get("exitCode") == 0)
+    grew = (prev_ids is None) or (ids > prev_ids)
+    s0["lastKey"] = key
+    s0["lastDyids"] = ids
+    s0["failStreak"] = 0 if ok else int(s0.get("failStreak", 0)) + 1
+    s0["zeroStreak"] = 0 if grew else int(s0.get("zeroStreak", 0)) + 1
+    s0["lastRun"] = st.get("finishedAt")
+    msg = None
+    if s0["failStreak"] >= 2:
+        msg = f"【B站抽奖】连续 {s0['failStreak']} 轮异常退出\n退出码: {st.get('exitCode')}\n时间: {st.get('finishedAt')}\n建议到面板「运行 → 一键体检」看看"
+    elif s0["zeroStreak"] >= 2:
+        msg = f"【B站抽奖】连续 {s0['zeroStreak']} 轮没有新增参与\n动态ID总数: {ids}\n时间: {st.get('finishedAt')}\n可能是风控/关键词太窄/Cookie 失效，建议体检"
+    if msg:
+        last = float(s0.get("notifiedAt") or 0)
+        if time.time() - last > 6 * 3600:
+            sent, out = _qq_send(msg)
+            s0["notifiedAt"] = time.time()
+            s0["notifyResult"] = ("sent" if sent else "fail") + " " + out[-80:]
+    try:
+        wr(ALERT, json.dumps(s0, ensure_ascii=False))
+    except Exception:
+        pass
+    return s0
+
+
+
 # ---------- Cookie 有效期 ----------
 def _bili_cookie_info(cookie):
     """SESSDATA 第二段是过期时间戳，能算出到期日。"""
@@ -624,6 +690,11 @@ def checkup():
         items.append({"name": "my_config.js", "level": "fail", "text": "缺失或为空", "hint": "用源码模式恢复配置"})
     else:
         items.append({"name": "my_config.js", "level": "ok", "text": f"{len(txt.splitlines())} 行", "hint": ""})
+    al = _alert_state()
+    if int(al.get("failStreak", 0)) >= 2 or int(al.get("zeroStreak", 0)) >= 2:
+        items.append({"name": "运行告警", "level": "fail",
+                      "text": f"连续失败 {al.get('failStreak',0)} 轮 / 零增长 {al.get('zeroStreak',0)} 轮",
+                      "hint": al.get("notifyResult", "")})
     worst = "fail" if any(i["level"] == "fail" for i in items) else ("warn" if any(i["level"] == "warn" for i in items) else "ok")
     return {"level": worst, "items": items}
 
@@ -913,7 +984,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             d0 = os.path.join(LOTTERY, "backups")
             os.makedirs(d0, exist_ok=True)
             name = "config-" + time.strftime("%Y%m%d_%H%M%S") + ".tar.gz"
-            files = [f for f in ("my_config.js", "env.js", "account.json") if os.path.exists(os.path.join(LOTTERY, f))]
+            what = str(d.get("what") or "config")
+            if what == "data":
+                files = [x for x in ("data", "my_config.js", "env.js") if os.path.exists(os.path.join(LOTTERY, x))]
+                name = "data-" + time.strftime("%Y%m%d_%H%M%S") + ".tar.gz"
+            else:
+                files = [f for f in ("my_config.js", "env.js", "account.json") if os.path.exists(os.path.join(LOTTERY, f))]
             shq(["tar", "czf", os.path.join(d0, name), "-C", LOTTERY] + files, 120)
             ok = os.path.exists(os.path.join(d0, name))
             return self.j(200 if ok else 500, {"ok": ok, "name": name, "msg": "已备份 " + name if ok else "备份失败"})
@@ -983,6 +1059,10 @@ def sampler():
             pass
         try:
             snapshots_touch()
+        except Exception:
+            pass
+        try:
+            alert_tick()
         except Exception:
             pass
         time.sleep(60)
