@@ -48,6 +48,15 @@ tr:last-child td{border-bottom:0}
 .muted{color:var(--dim)}
 .mono{font-family:var(--mono)}
 .pill{font:11.5px var(--mono);padding:1px 7px;border-radius:99px;border:1px solid var(--line)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:#fff;padding:7px 16px;font-size:13.5px;cursor:pointer;color:var(--dim)}
+.seg button.on{background:#0a0a0a;color:#fff}
+.frm{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px 16px;margin-top:8px}
+.fld{display:flex;align-items:center;gap:8px;border-bottom:1px solid #f1f1f1;padding:7px 0}
+.fld label{flex:0 0 168px;font:12.5px var(--mono);color:#3f3f46;overflow:hidden;text-overflow:ellipsis}
+.fld input[type=text],.fld input[type=number]{flex:1;min-width:60px;padding:6px 8px;font-size:12.8px}
+.fld input[type=checkbox]{width:16px;height:16px;accent-color:#0a0a0a}
+.fld .tagc{font-size:11px;color:var(--dim)}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--dim);margin-top:6px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 </style>
@@ -229,16 +238,43 @@ tr:last-child td{border-bottom:0}
   </div>
 
   <div class="sec" id="sec-conf">
-    <div class="card">
-      <h3>my_config.js</h3>
-      <div class="sub" style="margin-bottom:8px">保存前用 <span class="mono">node --check</span> 校验，通过才落盘并备份旧文件；下一轮生效。</div>
-      <textarea id="cfgBox" spellcheck="false"></textarea>
-      <div class="row" style="margin-top:10px">
-        <button class="btn primary" id="cfgSave">保存并校验</button>
-        <button class="btn" id="cfgReload">重新载入</button>
-        <span class="sub" id="cfgMsg"></span>
+    <div class="card" style="padding:12px 15px">
+      <div class="row" style="justify-content:space-between">
+        <div class="seg">
+          <button class="on" id="modeForm">可视化</button>
+          <button id="modeRaw">源码</button>
+        </div>
+        <div class="sub" id="confHint">可视化改的是 default_config 里的常用项，保存前同样过 node --check</div>
       </div>
     </div>
+
+    <div id="paneForm">
+      <div class="card" style="margin-top:12px">
+        <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">常用参数 <span class="sub" id="formCount"></span></h3>
+          <div class="row" style="gap:6px">
+            <button class="btn primary" id="formSave">保存改动</button>
+            <button class="btn" id="formReload">重新载入</button>
+          </div>
+        </div>
+        <div class="sub" id="formMsg" style="margin-top:8px"></div>
+        <div id="formBody" style="margin-top:6px">—</div>
+      </div>
+    </div>
+
+    <div id="paneRaw" style="display:none">
+      <div class="card" style="margin-top:12px">
+        <h3>my_config.js 源码</h3>
+        <div class="sub" style="margin-bottom:8px">完整文件编辑，保存前 <span class="mono">node --check</span> 校验，通过才落盘并备份。</div>
+        <textarea id="cfgBox" spellcheck="false"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="btn primary" id="cfgSave">保存并校验</button>
+          <button class="btn" id="cfgReload">重新载入</button>
+          <span class="sub" id="cfgMsg"></span>
+        </div>
+      </div>
+    </div>
+
     <div class="card" style="margin-top:12px">
       <h3>env.js（敏感值打码 · 只读）</h3>
       <pre id="envBox" style="max-height:34vh">—</pre>
@@ -514,15 +550,88 @@ async function loadWin(){
     ||'<tr><td colspan="3" class="sub">还没有中奖记录</td></tr>';
 }
 
+let CONF_MODE = localStorage.getItem('confMode') || 'form';
+
+function setConfMode(mode){
+  CONF_MODE = mode; localStorage.setItem('confMode', mode);
+  $('#modeForm').classList.toggle('on', mode==='form');
+  $('#modeRaw').classList.toggle('on', mode==='raw');
+  $('#paneForm').style.display = mode==='form' ? '' : 'none';
+  $('#paneRaw').style.display = mode==='raw' ? '' : 'none';
+  $('#confHint').textContent = mode==='form'
+    ? '可视化改的是 default_config 里的常用项，保存前同样过 node --check'
+    : '源码模式：整份文件编辑，多行数组/对象只能在这里改';
+}
+$('#modeForm').onclick=()=>setConfMode('form');
+$('#modeRaw').onclick=()=>setConfMode('raw');
+
+/* 单行数组 <-> 输入框文本 */
+function listToText(raw){ return raw.replace(/^\[|\]$/g,'').split(',').map(x=>x.trim()).filter(Boolean)
+  .map(x=>x.replace(/^['"]|['"]$/g,'')).join(', '); }
+function textToList(txt, wasQuoted){
+  const items = txt.split(',').map(x=>x.trim()).filter(Boolean);
+  const out = items.map(x => /^-?\d+(\.\d+)?$/.test(x) ? x : `'${x.replace(/'/g,"\\'")}'`);
+  return '[' + out.join(', ') + ']';
+}
+
+function fieldControl(f){
+  const k=f.key, raw=f.raw;
+  if(f.kind==='bool'){
+    return `<label><input type="checkbox" data-key="${k}" data-kind="bool" data-raw="${raw}" ${raw==='true'?'checked':''}> ${k}<span class="tagc">bool</span></label>`;
+  }
+  if(f.kind==='num'||f.kind==='expr'){
+    return `<label>${k}<input type="text" data-key="${k}" data-kind="${f.kind}" data-raw="${raw.replace(/"/g,'&quot;')}" value="${raw.replace(/"/g,'&quot;')}"><span class="tagc">${f.kind==='num'?'数字':'表达式'}</span></label>`;
+  }
+  if(f.kind==='list'){
+    return `<label>${k}<input type="text" data-key="${k}" data-kind="list" data-raw="${raw.replace(/"/g,'&quot;')}" value="${listToText(raw).replace(/"/g,'&quot;')}"><span class="tagc">数组</span></label>`;
+  }
+  const val = raw.replace(/^['"]|['"]$/g,'');
+  return `<label>${k}<input type="text" data-key="${k}" data-kind="str" data-raw="${raw.replace(/"/g,'&quot;')}" value="${val.replace(/"/g,'&quot;')}"><span class="tagc">文本</span></label>`;
+}
+
+async function loadForm(){
+  const d = await api('/panel/config/form');
+  if(!d.ok){ $('#formBody').innerHTML = `<div class="sub">${d.why||'解析失败'}</div>`; return; }
+  $('#formCount').textContent = `共 ${d.count} 项可可视化编辑`;
+  $('#formBody').innerHTML = (d.groups||[]).map(g=>
+    `<div style="margin-top:14px"><div class="sub" style="font-weight:600;color:#0a0a0a">${g.name}</div>
+      <div class="frm">${g.fields.map(fieldControl).join('')}</div></div>`).join('');
+}
+
+$('#formReload').onclick=loadForm;
+$('#formSave').onclick=async()=>{
+  const changes={};
+  document.querySelectorAll('#formBody [data-key]').forEach(el=>{
+    const k=el.dataset.key, kind=el.dataset.kind, raw=el.dataset.raw;
+    if(raw && raw.slice(1).includes('[')) return;   // 嵌套数组不提交，避免改坏
+    let cur;
+    if(kind==='bool') cur = el.checked ? 'true' : 'false';
+    else if(kind==='num'||kind==='expr') cur = el.value.trim();
+    else if(kind==='list') cur = textToList(el.value);
+    else cur = `'${el.value.replace(/'/g,"\\'")}'`;
+    if(cur !== raw) changes[k]=cur;
+  });
+  const n=Object.keys(changes).length;
+  if(!n){ $('#formMsg').textContent='没有改动'; return; }
+  $('#formMsg').textContent=`保存 ${n} 项中…`;
+  const r=await post('/panel/config/form',{changes});
+  const msg = r.ok ? ('✓ '+r.msg) : ('✗ '+(r.error||'')+(r.detail?('：'+String(r.detail).slice(0,160)):''));
+  if(r.ok) await loadForm();
+  $('#formMsg').textContent = msg;
+};
+
 async function loadConf(){
+  setConfMode(CONF_MODE);
   const d=await api('/panel/config');
   $('#cfgBox').value=d.my_config||''; $('#envBox').textContent=d.env||'—';
+  if(CONF_MODE==='form') loadForm();
 }
 $('#cfgReload').onclick=loadConf;
 $('#cfgSave').onclick=async()=>{
   $('#cfgMsg').textContent='校验中…';
   const r=await post('/panel/config',{my_config:$('#cfgBox').value});
   $('#cfgMsg').textContent=r.ok?('✓ '+r.msg):('✗ '+(r.error||'')+(r.detail?('：'+String(r.detail).slice(0,160)):''));
+  if(r.ok) loadForm();
 };
 
 async function loadSet(){

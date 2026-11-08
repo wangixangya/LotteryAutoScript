@@ -268,6 +268,9 @@ def winners():
         key = (date, tm, msg)
         if key in seen:
             continue
+        # 嵌套数组/对象（如 at_users: [[名字, uid], ...]）表单改不了，交给源码模式
+        if _kind(raw) == "list" and ("[" in raw[1:] or "{" in raw):
+            continue
         if ("可能中奖" in tag) or ("可能中奖" in msg) or ("中奖了" in msg) or ("恭喜" in msg):
             seen.add(key)
             out.append({"time": f"{date} {tm}", "level": lvl, "tag": tag, "msg": msg[:120]})
@@ -352,6 +355,150 @@ def spawn(script, extra=None):
                      stderr=subprocess.DEVNULL, start_new_session=True, cwd=LOTTERY)
     return True
 
+
+# ---------- my_config.js 可视化表单 ----------
+CFG_BLOCK = "default_config"
+FORM_GROUPS = [
+    ("关注与关键词", ["UIDs", "TAGs", "Articles", "APIs", "TxT", "key_words", "notice_key_words", "blacklist", "blockword"]),
+    ("抽奖行为", ["LotteryOrder", "check_if_duplicated", "maxday", "max_create_time", "disable_reserve_lottery",
+                  "is_not_relay_reserve_lottery", "sneaktower", "is_imitator", "only_followed", "minfollower",
+                  "save_lottery_info_to_file", "set_lottery_info_url"]),
+    ("扫描范围", ["uid_scan_page", "tag_scan_page", "article_scan_page", "article_create_time", "not_check_article",
+                  "check_session_pages", "partition_id"]),
+    ("延时（毫秒）", ["wait", "search_wait", "get_session_wait", "update_session_wait", "get_partition_wait",
+                      "get_dynamic_detail_wait", "filter_wait", "random_dynamic_wait", "reserve_lottery_wait",
+                      "lottery_loop_wait", "check_loop_wait", "clear_loop_wait"]),
+    ("动态与评论", ["create_dy", "create_dy_type", "create_dy_num", "dy_contents", "create_dy_mode", "at_users",
+                    "is_repost_then_chat", "relay", "chat", "is_copy_chat", "copy_blockword", "is_not_create_partition"]),
+    ("清理", ["clear_max_day", "clear_remove_dynamic", "clear_remove_attention", "clear_remove_delay",
+              "clear_dynamic_type", "clear_white_list", "clear_partition", "clear_quick_remove_attention",
+              "clear_quick_remove_attention_fans_number_smallest"]),
+    ("AI", ["model", "chatmodel", "prompt", "ai_judge_parm", "providers"]),
+]
+
+
+def _split_comment(raw):
+    """把 'value, // 注释' 切成 (value, comment)，引号内的 // 不当注释（如 file://...）。"""
+    out, q, i = [], None, 0
+    while i < len(raw):
+        ch = raw[i]
+        if q:
+            out.append(ch)
+            if ch == q and (i == 0 or raw[i - 1] != "\\"):
+                q = None
+            i += 1
+            continue
+        if ch in "'\"":
+            q = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(raw) and raw[i + 1] == "/":
+            return "".join(out), raw[i:]
+        out.append(ch)
+        i += 1
+    return "".join(out), ""
+
+
+def _kind(raw):
+    if raw in ("true", "false"):
+        return "bool"
+    if re.fullmatch(r"-?\d+(\.\d+)?", raw):
+        return "num"
+    if re.fullmatch(r"'.*'|\".*\"", raw, re.S):
+        return "str"
+    if raw.startswith("[") and raw.endswith("]"):
+        return "list"
+    return "expr"
+
+
+def cfg_fields():
+    """解析 default_config 块里的顶层标量/单行数组字段（多行对象/数组不参与表单，走源码模式）。"""
+    lines = rd(os.path.join(LOTTERY, "my_config.js")).splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(rf"\s*{CFG_BLOCK}\s*:\s*\{{", ln):
+            start = i
+            break
+    if start is None:
+        return {"ok": False, "fields": [], "why": f"没找到 {CFG_BLOCK} 块"}
+    fields, seen = [], set()
+    for i in range(start + 1, len(lines)):
+        ln = lines[i]
+        if re.match(r"^\s{0,4}\}\s*,?\s*$", ln):
+            break
+        m = re.match(r"^(\s{6,10})([A-Za-z_][\w]*)\s*:\s*(.*)$", ln)
+        if not m:
+            continue
+        key, raw = m.group(2), m.group(3).strip()
+        if raw.startswith("{") or raw.endswith(",") is False and raw == "":
+            continue
+        # 多行值（[ 或 { 开头但没有闭合）跳过
+        if (raw.startswith("[") or raw.startswith("{")) and not re.search(r"[\]\}]\s*,?\s*(//.*)?$", raw):
+            continue
+        raw = _split_comment(raw)[0].strip().rstrip(",").strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        kind = _kind(raw)
+        # 嵌套数组/对象（at_users: [[名字, uid], ...]、create_dy_mode: [[0],[0]]）表单改不了，交给源码模式
+        if kind == "list" and ("[" in raw[1:] or "{" in raw):
+            continue
+        fields.append({"key": key, "raw": raw, "kind": kind, "line": i})
+    return {"ok": True, "fields": fields}
+
+
+def cfg_grouped(fields):
+    got = {f["key"]: f for f in fields}
+    used, groups = set(), []
+    for name, keys in FORM_GROUPS:
+        rows = [got[k] for k in keys if k in got]
+        if rows:
+            groups.append({"name": name, "fields": rows})
+            used.update(k for k in keys if k in got)
+    rest = [f for f in fields if f["key"] not in used]
+    if rest:
+        groups.append({"name": "其他", "fields": rest})
+    return groups
+
+
+def cfg_apply(changes):
+    """把 {key: 新值原文} 写回 default_config 块，行级替换，保留缩进与行尾注释。"""
+    path = os.path.join(LOTTERY, "my_config.js")
+    lines = rd(path).splitlines(True)
+    start = next((i for i, ln in enumerate(lines) if re.match(rf"\s*{CFG_BLOCK}\s*:\s*\{{", ln)), None)
+    if start is None:
+        return False, f"没找到 {CFG_BLOCK} 块", ""
+    done = []
+    for i in range(start + 1, len(lines)):
+        ln = lines[i]
+        if re.match(r"^\s{0,4}\}\s*,?\s*$", ln):
+            break
+        m = re.match(r"^(\s{6,10})([A-Za-z_][\w]*)(\s*:\s*)(.*?)(\r?\n)?$", ln)
+        if not m or m.group(2) not in changes:
+            continue
+        indent, key, sep, rest, nl = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5) or "\n"
+        _val, cm = _split_comment(rest)
+        comment = cm.strip()
+        lines[i] = (f"{indent}{key}{sep}{changes[key]},  {comment}" if comment else f"{indent}{key}{sep}{changes[key]},") + nl
+        done.append(key)
+    if not done:
+        return False, "没有匹配到可改的字段", ""
+    tmp = path + ".check.js"
+    wr(tmp, "".join(lines))
+    chk = node_check(tmp)
+    if "SyntaxError" in chk or "ERR_" in chk:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        return False, "语法检查未通过", chk[-600:]
+    try:
+        shutil.copy2(path, path + ".bak." + time.strftime("%Y%m%d_%H%M%S"))
+    except Exception:
+        pass
+    os.replace(tmp, path)
+    return True, "已保存：" + "、".join(done) + "（下一轮生效）", ""
 
 # ---------- 账号 / 二维码 / 审计 / 上游 ----------
 AUDIT = os.path.join(LOTTERY, "logs/panel-audit.log")
@@ -503,6 +650,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 files.append({"name": n, "size": os.path.getsize(fp),
                               "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(fp)))})
             return self.j(200, {"backups": files[:60]})
+        if p == "/panel/config/form":
+            f = cfg_fields()
+            return self.j(200, {"ok": f.get("ok", False), "why": f.get("why", ""),
+                                "groups": cfg_grouped(f.get("fields", [])) if f.get("ok") else [],
+                                "count": len(f.get("fields", []))})
         if p == "/panel/accounts":
             return self.j(200, accounts())
         if p == "/panel/upstream":
@@ -598,6 +750,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
             os.replace(tmp, path)
             return self.j(200, {"ok": True, "msg": "已保存（下一轮生效），旧文件已备份"})
+
+        if p == "/panel/config/form":
+            changes = d.get("changes") or {}
+            if not isinstance(changes, dict) or not changes:
+                return self.j(400, {"error": "没有要保存的改动"})
+            ok, msg, detail = cfg_apply({k: str(v) for k, v in changes.items()})
+            return self.j(200 if ok else 400, {"ok": ok, "msg": msg, "error": None if ok else msg, "detail": detail})
 
         if p == "/panel/schedule":
             try:
