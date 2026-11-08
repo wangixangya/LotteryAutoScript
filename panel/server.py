@@ -21,7 +21,7 @@ STATS = os.path.join(LOTTERY, "panel-stats.json")
 HOST_ROOT = os.environ.get("HOST_ROOT", "/host")   # 宿主根目录只读挂载，用于读主机名/发行版/磁盘
 CONTAINER = "lottery-auto-script"
 NODE_IMAGE = "node:lts-alpine"
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 SESSIONS = {}
 _LOCK = threading.Lock()
