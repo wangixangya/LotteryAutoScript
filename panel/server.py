@@ -8,7 +8,7 @@
   由宿主 cron 执行，面板重启不影响调度。
 - 可视化数据来源：日志解析（每轮/每中奖）+ 每日快照（panel-stats.json）+ 内存采样（CPU/内存曲线）。
 """
-import glob, http.server, ipaddress, json, os, re, shutil, socketserver, subprocess
+import glob, http.server, ipaddress, json, os, re, shutil, socketserver, subprocess, urllib.parse
 import threading, time, secrets
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -522,6 +522,113 @@ def cfg_apply(changes):
     os.replace(tmp, path)
     return True, "已保存：" + "、".join(done) + "（下一轮生效）", ""
 
+# ---------- Cookie 有效期 ----------
+def _bili_cookie_info(cookie):
+    """SESSDATA 第二段是过期时间戳，能算出到期日。"""
+    out = {"expiresAt": None, "daysLeft": None, "expired": None}
+    m = re.search(r"SESSDATA=([^;]+)", cookie)
+    if not m:
+        return out
+    raw = urllib.parse.unquote(m.group(1))
+    parts = raw.split(",")
+    if len(parts) < 2 or not parts[1].isdigit():
+        return out
+    ts = int(parts[1])
+    out["expiresAt"] = time.strftime("%Y-%m-%d", time.localtime(ts))
+    out["daysLeft"] = round((ts - time.time()) / 86400, 1)
+    out["expired"] = ts < time.time()
+    return out
+
+
+# ---------- cron 下次运行 ----------
+def _cron_next(expr, base=None):
+    """只支持常用写法：分 时 日 月 周（支持 *、固定数字、*/N）。解析不了返回 None。"""
+    base = base or time.time()
+    f = expr.split()
+    if len(f) < 5:
+        return None
+    t = time.localtime(base)
+    def hit(field, val, lo, hi):
+        if field == "*":
+            return True
+        if field.startswith("*/"):
+            step = int(field[2:] or 1)
+            return (val - lo) % step == 0
+        if "," in field:
+            return str(val) in field.split(",")
+        if "-" in field:
+            a, b = field.split("-")[:2]
+            return int(a) <= val <= int(b)
+        return field.isdigit() and int(field) == val
+    cur = int(base)
+    for _ in range(60 * 24 * 8):      # 最多找 8 天
+        tm = time.localtime(cur)
+        if (hit(f[0], tm.tm_min, 0, 59) and hit(f[1], tm.tm_hour, 0, 23)
+                and hit(f[2], tm.tm_mday, 1, 31) and hit(f[3], tm.tm_mon, 1, 12)
+                and hit(f[4], (tm.tm_wday + 1) % 7, 0, 6)):
+            return cur
+        cur += 60
+        cur -= cur % 60
+    return None
+
+
+def _next_runs(entries):
+    out = []
+    for e in entries:
+        ts = _cron_next(e["cron"])
+        if ts:
+            out.append({"cron": e["cron"], "cmd": e["cmd"], "next": ts,
+                        "nextText": time.strftime("%m-%d %H:%M", time.localtime(ts)),
+                        "inMin": max(0, round((ts - time.time()) / 60))})
+    return sorted(out, key=lambda x: x["next"])
+
+
+# ---------- 一键体检 ----------
+def checkup():
+    items = []
+    st = docker_state()
+    items.append({"name": "抽奖容器", "level": "ok" if st.get("exists") else "fail",
+                  "text": ("运行中" if st.get("running") else f"空闲（上次退出码 {st.get('exitCode')}）") if st.get("exists") else "未创建",
+                  "hint": "空闲属正常，跑完会自动停" if st.get("exists") else "执行 start.sh 建容器"})
+    acc = accounts()
+    for a in acc.get("accounts", []):
+        exp = a.get("expiresAt")
+        if a.get("expired"):
+            items.append({"name": f"Cookie 账号{a.get('number') or ''}", "level": "fail",
+                          "text": "已过期", "hint": "扫二维码重新登录（账号页）"})
+        elif a.get("daysLeft") is not None and a["daysLeft"] < 7:
+            items.append({"name": f"Cookie 账号{a.get('number') or ''}", "level": "warn",
+                          "text": f"仅剩 {a['daysLeft']} 天", "hint": "尽快重新登录"})
+        elif exp:
+            items.append({"name": f"Cookie 账号{a.get('number') or ''}", "level": "ok",
+                          "text": f"有效至 {exp}（{a['daysLeft']} 天）", "hint": ""})
+        else:
+            items.append({"name": f"Cookie 账号{a.get('number') or ''}", "level": "warn",
+                          "text": "解析不到有效期", "hint": "确认 COOKIE 含 SESSDATA"})
+    ent = cron_entries()
+    items.append({"name": "定时任务", "level": "ok" if ent else "fail",
+                  "text": f"{len(ent)} 条" if ent else "未配置", "hint": "设置页可编辑" if not ent else ""})
+    nxt = _next_runs(ent)
+    if nxt:
+        items.append({"name": "下一轮", "level": "ok", "text": f"{nxt[0]['nextText']}（{nxt[0]['inMin']} 分钟后）", "hint": ""})
+    d = disk_info()
+    if d.get("pct", 0) > 90:
+        items.append({"name": "磁盘", "level": "fail", "text": f"已用 {d['pct']}%", "hint": "清理镜像/日志"})
+    elif d.get("pct", 0) > 80:
+        items.append({"name": "磁盘", "level": "warn", "text": f"已用 {d['pct']}%", "hint": ""})
+    ids = dyid_list()
+    if not ids:
+        items.append({"name": "动态 ID 库", "level": "warn", "text": "空", "hint": "首轮会自行建立"})
+    txt = rd(os.path.join(LOTTERY, "my_config.js"))
+    if not txt.strip():
+        items.append({"name": "my_config.js", "level": "fail", "text": "缺失或为空", "hint": "用源码模式恢复配置"})
+    else:
+        items.append({"name": "my_config.js", "level": "ok", "text": f"{len(txt.splitlines())} 行", "hint": ""})
+    worst = "fail" if any(i["level"] == "fail" for i in items) else ("warn" if any(i["level"] == "warn" for i in items) else "ok")
+    return {"level": worst, "items": items}
+
+
+
 # ---------- 账号 / 二维码 / 审计 / 上游 ----------
 AUDIT = os.path.join(LOTTERY, "logs/panel-audit.log")
 QR = os.path.join(LOTTERY, "bilibili-login-qr.png")
@@ -549,8 +656,9 @@ def accounts():
         if len(cookie) < 50:      # MULTIPLE_ACCOUNT_PARM 里的示例是空串，跳过
             continue
         uid = (re.search(r"DedeUserID=(\d+)", cookie) or [None, ""])[1]
+        info = _bili_cookie_info(cookie)
         out.append({"number": num, "note": note, "uid": uid, "clear": clear,
-                    "cookieLen": len(cookie), "hasBiliJct": "bili_jct=" in cookie})
+                    "cookieLen": len(cookie), "hasBiliJct": "bili_jct=" in cookie, **info})
     flags = {}
     for k in ("ENABLE_MULTIPLE_ACCOUNT", "ENABLE_AI_JUDGE", "ENABLE_AI_COMMENTS",
               "ENABLE_CHAT_CAPTCHA_OCR", "LOTTERY_LOG_LEVEL", "NOT_GO_LOTTERY"):
@@ -628,8 +736,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.j(401, {"error": "未登录"})
 
         if p == "/panel/status":
+            ent = cron_entries()
             return self.j(200, {"container": docker_state(), "dyids": len(dyid_list()),
-                                "info": lottery_info_counts(), "schedule": cron_entries(),
+                                "info": lottery_info_counts(), "schedule": ent, "next": _next_runs(ent),
                                 "version": VERSION, "uptime": int(time.time() - START_TS),
                                 "now": time.strftime("%Y-%m-%d %H:%M:%S")})
         if p == "/panel/system":
@@ -650,6 +759,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 lines = 400
             txt = rd(os.path.join(LOTTERY, "logs", name))
+            grep = (q.get("grep") or "").strip()
+            if grep:
+                hits = [ln for ln in txt.splitlines() if grep in ln]
+                return self.j(200, {"file": name, "text": "\n".join(hits[-lines:]), "size": len(txt),
+                                    "hits": len(hits), "files": []})
             logdir = os.path.join(LOTTERY, "logs")
             return self.j(200, {"file": name, "text": "\n".join(txt.splitlines()[-lines:]),
                                 "size": len(txt), "mtime": time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(os.path.join(logdir, name)))) if os.path.exists(os.path.join(logdir, name)) else "",
@@ -661,6 +775,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                               rd(os.path.join(LOTTERY, "env.js")))})
         if p == "/panel/data":
             ids = dyid_list()
+            qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+            qq = dict(x.split("=", 1) for x in qs.split("&") if "=" in x)
+            needle = urllib.parse.unquote(qq.get("q", "")).strip()
+            if needle:
+                hit = [x for x in ids if needle in x]
+                return self.j(200, {"q": needle, "hits": len(hit), "sample": hit[-40:][::-1]})
             return self.j(200, {"dyids": len(ids), "sample": ids[-20:][::-1], "info": lottery_info_counts(),
                                 "size": len(rd(os.path.join(LOTTERY, "data/dyids/dyid.txt")))})
         if p == "/panel/backups":
@@ -677,6 +797,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.j(200, {"ok": f.get("ok", False), "why": f.get("why", ""),
                                 "groups": cfg_grouped(f.get("fields", [])) if f.get("ok") else [],
                                 "count": len(f.get("fields", []))})
+        if p == "/panel/checkup":
+            return self.j(200, checkup())
         if p == "/panel/accounts":
             return self.j(200, accounts())
         if p == "/panel/upstream":

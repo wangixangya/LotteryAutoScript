@@ -57,6 +57,10 @@ tr:last-child td{border-bottom:0}
 .fld input[type=text],.fld input[type=number]{flex:1;min-width:60px;padding:6px 8px;font-size:12.8px}
 .fld input[type=checkbox]{width:16px;height:16px;accent-color:#0a0a0a}
 .fld .tagc{font-size:11px;color:var(--dim)}
+.lg-err{color:#fca5a5}.lg-ok{color:#86efac}.lg-warn{color:#fcd34d}.lg-dim{color:#71717a}
+.chk{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid #f2f2f2;font-size:13px}
+.dot{width:8px;height:8px;border-radius:99px;margin-top:6px;flex:0 0 8px}
+.d-ok{background:#15803d}.d-warn{background:#b45309}.d-fail{background:#b91c1c}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--dim);margin-top:6px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 </style>
@@ -94,12 +98,14 @@ tr:last-child td{border-bottom:0}
 
 <main>
   <div class="sec on" id="sec-dash">
+    <div id="alertBar" style="display:none;margin-bottom:12px"></div>
     <div class="grid g4" style="margin-bottom:12px">
       <div class="card"><h3>容器</h3><div class="kpi" id="kState">—</div><div class="sub" id="kStateSub">—</div></div>
       <div class="card"><h3>累计运行</h3><div class="kpi"><span id="kRuns">—</span><small>轮</small></div><div class="sub" id="kSkip">—</div></div>
       <div class="card"><h3>已知动态 ID</h3><div class="kpi" id="kDyid">—</div><div class="sub">已参与动态去重库（dyid）</div></div>
       <div class="card"><h3>待参与抽奖</h3><div class="kpi" id="kInfo">—</div><div class="sub">lottery_info 待处理</div></div>
       <div class="card"><h3>中奖记录</h3><div class="kpi" id="kWin">—</div><div class="sub">检测到"可能中奖"</div></div>
+      <div class="card"><h3>下一轮</h3><div class="kpi" id="kNext" style="font-size:20px">—</div><div class="sub" id="kNextSub">—</div></div>
     </div>
 
     <div class="grid g2" style="margin-bottom:12px">
@@ -166,6 +172,14 @@ tr:last-child td{border-bottom:0}
       </div>
     </div>
     <div class="card" style="margin-top:12px">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">一键体检</h3>
+        <button class="btn sm" id="chkBtn">立刻体检</button>
+      </div>
+      <div id="chkBody" style="margin-top:8px"><div class="sub">点上面按钮跑一次自检（容器 / Cookie 有效期 / 定时 / 磁盘 / 配置）</div></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
       <h3>最近运行</h3>
       <table><thead><tr><th style="width:170px">时间</th><th>结果</th></tr></thead><tbody id="runsTb"></tbody></table>
     </div>
@@ -177,11 +191,13 @@ tr:last-child td{border-bottom:0}
         <select id="logFile"></select>
         <button class="btn sm" id="logRefresh">刷新</button>
         <label class="sub"><input type="checkbox" id="logAuto"> 自动刷新 5s</label>
-        <input type="text" id="logFilter" placeholder="过滤关键字" style="max-width:200px">
+        <input type="text" id="logFilter" placeholder="全文件搜索（回车）" style="max-width:220px">
+        <a class="btn sm" id="logDl" href="#" download>下载</a>
         <div class="sp"></div>
         <span class="sub" id="logMeta"></span>
       </div>
       <pre id="logBox">—</pre>
+      <div class="sub" id="logHits" style="margin-top:6px"></div>
     </div>
   </div>
 
@@ -212,7 +228,7 @@ tr:last-child td{border-bottom:0}
       <div class="card">
         <h3>B站账号</h3>
         <div class="sub" style="margin-bottom:8px">解析自 env.js 的 account_parm；Cookie 不外传，只显示长度与关键字段是否齐全。</div>
-        <table><thead><tr><th style="width:44px">#</th><th>备注 / UID</th><th style="width:86px">清理功能</th><th style="width:118px">Cookie 状态</th></tr></thead>
+        <table><thead><tr><th style="width:44px">#</th><th>备注 / UID</th><th style="width:120px">Cookie 有效期</th><th style="width:76px">清理</th></tr></thead>
           <tbody id="acctTb"></tbody></table>
         <div class="sub" id="acctFlags" style="margin-top:10px">—</div>
       </div>
@@ -253,6 +269,7 @@ tr:last-child td{border-bottom:0}
         <div class="row" style="justify-content:space-between">
           <h3 style="margin:0">常用参数 <span class="sub" id="formCount"></span></h3>
           <div class="row" style="gap:6px">
+            <input type="text" id="formSearch" placeholder="搜索配置项…" style="width:170px">
             <button class="btn primary" id="formSave">保存改动</button>
             <button class="btn" id="formReload">重新载入</button>
           </div>
@@ -457,6 +474,9 @@ async function loadDash(){
   $('#kInfo').textContent = fmt(st.info);
   $('#kWin').textContent = fmt(st.winsTotal);
   $('#verText').textContent='v'+d.version;
+  const nx=(d.next||[])[0];
+  $('#kNext').textContent = nx? nx.nextText : '—';
+  $('#kNextSub').textContent = nx? `${nx.inMin} 分钟后 · ${nx.cmd.split('/').pop()}` : '没有定时任务';
   $('#chartRuns').innerHTML = bars((st.series||[]).slice(-30));
   $('#chartGrowth').innerHTML = line((st.growth||[]).slice(-30));
   $('#donutCpu').innerHTML = donut(s.cpu);
@@ -469,6 +489,7 @@ async function loadDash(){
     const lg = await api('/panel/logs?file=lottery-run.log&lines=10');
     $('#liveBox').textContent = (lg.text||'').split('\n').map(zhLog).filter(l=>l.trim()).join('\n')||'（暂无）';
   }catch(e){}
+  try{ await runCheckup(true); }catch(e){}
   const smp = await api('/panel/samples');
   $('#chartSamples').innerHTML = spark(smp.cpu||[]);
   $('#chartTimeline').innerHTML = timeline(d.schedule||[]);
@@ -476,6 +497,30 @@ async function loadDash(){
     `<tr><td class="mono" style="width:118px">${e.cron}</td><td class="mono">${e.cmd.split('/').pop()}</td></tr>`).join('')
     ||'<tr><td class="sub">还没有定时任务</td></tr>';
 }
+
+async function runCheckup(silent){
+  const d=await api('/panel/checkup');
+  const color={ok:'d-ok',warn:'d-warn',fail:'d-fail'};
+  $('#chkBody').innerHTML=(d.items||[]).map(i=>
+    `<div class="chk"><span class="dot ${color[i.level]||'d-ok'}"></span>
+      <div><b style="font-weight:500">${i.name}</b> <span class="sub">${i.text}</span>
+      ${i.hint?`<div class="sub" style="font-size:12px">${i.hint}</div>`:''}</div></div>`).join('');
+  // 概览预警
+  const bad=(d.items||[]).filter(i=>i.level==='fail'), warn=(d.items||[]).filter(i=>i.level==='warn');
+  const bar=$('#alertBar');
+  if(bad.length||warn.length){
+    bar.style.display='';
+    bar.innerHTML=`<div class="card" style="border-color:${bad.length?'#f3c6c6':'#f0d9b5'}">
+      <div class="row" style="justify-content:space-between">
+        <div><b style="font-weight:600">${bad.length?'⚠ 需要处理':'提示'}</b>
+          <span class="sub"> ${(bad.concat(warn)).map(i=>i.name+'：'+i.text).join(' · ')}</span></div>
+        <button class="btn sm" onclick="document.querySelector('nav button[data-sec=\'run\']').click();runCheckup()">去看体检</button>
+      </div></div>`;
+  } else if(!silent){ bar.style.display='none'; }
+  else bar.style.display='none';
+  return d;
+}
+$('#chkBtn').onclick=()=>runCheckup();
 
 async function loadRuns(){
   const st=await api('/panel/stats');
@@ -489,16 +534,27 @@ async function loadRuns(){
 
 async function loadLogs(){
   const sel=$('#logFile'), want=sel.value||'lottery-run.log';
-  const d=await api('/panel/logs?file='+encodeURIComponent(want)+'&lines=500');
-  if((d.files||[]).join()!==[...sel.options].map(o=>o.value).join()){
+  const kw=($('#logFilter').value||'').trim();
+  const d=await api('/panel/logs?file='+encodeURIComponent(want)+'&lines=800'+(kw?('&grep='+encodeURIComponent(kw)):''));
+  if((d.files||[]).length && d.files.join()!==[...sel.options].map(o=>o.value).join()){
     const FILE_ZH={'lottery-run.log':'抽奖运行','winner-check.log':'中奖检测','clear.log':'动态清理','cleanup.log':'数据清理','panel-audit.log':'面板操作审计'};
-    sel.innerHTML=(d.files||['lottery-run.log']).map(f=>`<option value="${f}">${(FILE_ZH[f]||f)+'（'+f+'）'}</option>`).join('');
+    sel.innerHTML=d.files.map(f=>`<option value="${f}">${(FILE_ZH[f]||f)+'（'+f+'）'}</option>`).join('');
     sel.value=want;
   }
-  const kw=($('#logFilter').value||'').trim();
   const lines=(d.text||'').split('\n').map(zhLog).filter(l=>l.trim());
-  $('#logBox').textContent = kw? (lines.filter(l=>l.includes(kw)).join('\n')||'（无匹配）') : (lines.join('\n')||'（空）');
-  $('#logMeta').textContent = `${(d.size/1024).toFixed(1)} KB · ${lines.length} 行 · ${d.mtime||''}${kw?' · 过滤「'+kw+'」':''}`;
+  const esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  $('#logBox').innerHTML = lines.map(l=>{
+    let cls='';
+    if(/TypeError|SyntaxError|Error|失败|❌|超时/.test(l)) cls='lg-err';
+    else if(/成功|中奖|✅|📮|OK/.test(l)) cls='lg-ok';
+    else if(/Warn|跳过|⏭|风控|412/.test(l)) cls='lg-warn';
+    else if(/^lottery-auto-script$/.test(l)) cls='lg-dim';
+    return cls? `<span class="${cls}">${esc(l)}</span>` : esc(l);
+  }).join('\n') || (kw?'<span class="lg-dim">（无匹配）</span>':'（空）');
+  $('#logMeta').textContent = `${(d.size/1024).toFixed(1)} KB · ${lines.length} 行 · ${d.mtime||''}`;
+  $('#logHits').textContent = kw? `全文件命中 ${d.hits||0} 行（显示最近 ${lines.length} 行）` : '';
+  $('#logDl').href = '/panel/download?file=logs/'+encodeURIComponent(want);
+  $('#logDl').setAttribute('download', want);
   $('#logBox').scrollTop=$('#logBox').scrollHeight;
 }
 $('#logFile').onchange=loadLogs; $('#logRefresh').onclick=loadLogs; $('#logFilter').oninput=loadLogs;
@@ -519,9 +575,8 @@ $('#dSearch').addEventListener('keydown', async e=>{
   if(e.key!=='Enter') return;
   const q=($('#dSearch').value||'').trim();
   if(!q){ $('#dSearchMsg').textContent='请输入 dyid 片段'; return; }
-  const d=await api('/panel/data');
-  const hit=(d.sample||[]).filter(x=>x.includes(q));
-  $('#dSearchMsg').textContent=hit.length? ('命中 '+hit.length+' 个（仅最近 20 个范围内）：'+hit.join('  ')) : '最近 20 个里没有匹配；完整库见 docker exec 或 /root/lottery-docker/data/dyids/dyid.txt';
+  const d=await api('/panel/data?q='+encodeURIComponent(q));
+  $('#dSearchMsg').textContent = d.hits? (`全库命中 ${d.hits} 个：`+d.sample.join('  ')) : '全库没有这个片段，确认粘贴的是动态 ID';
 });
 $('#dClean').onclick=async()=>{ if(!confirm('清理过期抽奖数据（dyid 去重、过期 lottery_info、旧备份）？')) return;
   const r=await post('/panel/cleanup'); $('#dSearchMsg').textContent=r.msg||r.error; };
@@ -530,9 +585,12 @@ async function loadAcct(){
   const d=await api('/panel/accounts');
   $('#acctTb').innerHTML=(d.accounts||[]).map(a=>
     `<tr><td class="mono">${a.number||'-'}</td><td>${a.note||'<span class=sub>未命名</span>'}${a.uid?`<span class="mono sub"> · ${a.uid}</span>`:''}</td>
-     <td>${a.clear==='true'?'<span class="tag g">开</span>':'<span class="tag">关</span>'}</td>
-     <td class="mono sub">${a.cookieLen} 字符${a.hasBiliJct?'':' <span style="color:var(--bad)">缺 bili_jct</span>'}</td></tr>`).join('')
+     <td class="mono">${a.expired?'<span style="color:var(--bad)">已过期</span>':(a.expiresAt?`${a.expiresAt}<div class="sub" style="display:inline"> · 剩 ${a.daysLeft} 天</div>`:'<span class="sub">无法解析</span>')}</td>
+     <td>${a.clear==='true'?'<span class="tag g">开</span>':'<span class="tag">关</span>'}</td></tr>`).join('')
      ||'<tr><td colspan="4" class="sub">没解析到账号，检查 env.js 的 account_parm</td></tr>';
+  if((d.accounts||[]).some(a=>a.expired||(a.daysLeft!==null&&a.daysLeft<7))){
+    $('#acctFlags').innerHTML += ' <span style="color:var(--bad)">⚠ Cookie 快到期/已过期，扫右侧二维码重登</span>';
+  }
   const f=d.flags||{};
   $('#acctFlags').innerHTML=`多账号开关 ${d.multiple?'开':'关'} · AI判定 ${f.ENABLE_AI_JUDGE||'-'} · AI评论 ${f.ENABLE_AI_COMMENTS||'-'} · 日志等级 ${f.LOTTERY_LOG_LEVEL||'-'}`;
   const img=new Image(); img.src='/panel/qr?t='+Date.now();
@@ -596,11 +654,23 @@ async function loadForm(){
   if(!d.ok){ $('#formBody').innerHTML = `<div class="sub">${d.why||'解析失败'}</div>`; return; }
   $('#formCount').textContent = `共 ${d.count} 项可可视化编辑`;
   $('#formBody').innerHTML = (d.groups||[]).map(g=>
-    `<div style="margin-top:14px"><div class="sub" style="font-weight:600;color:#0a0a0a">${g.name}</div>
+    `<div data-grp style="margin-top:14px"><div class="sub" style="font-weight:600;color:#0a0a0a">${g.name}</div>
       <div class="frm">${g.fields.map(fieldControl).join('')}</div></div>`).join('');
 }
 
 $('#formReload').onclick=loadForm;
+$('#formSearch').oninput=()=>{
+  const q=($('#formSearch').value||'').trim().toLowerCase();
+  document.querySelectorAll('#formBody .fld, #formBody label').forEach(el=>{
+    const t=(el.innerText||'').toLowerCase();
+    el.style.display = (!q || t.includes(q)) ? '' : 'none';
+  });
+  document.querySelectorAll('#formBody [data-grp]').forEach(g=>{
+    const vis=[...g.querySelectorAll('label')].some(l=>l.style.display!=='none');
+    g.style.display = vis?'':'none';
+  });
+};
+let FORM_PENDING=null;
 $('#formSave').onclick=async()=>{
   const changes={};
   document.querySelectorAll('#formBody [data-key]').forEach(el=>{
@@ -614,11 +684,25 @@ $('#formSave').onclick=async()=>{
     if(cur !== raw) changes[k]=cur;
   });
   const n=Object.keys(changes).length;
-  if(!n){ $('#formMsg').textContent='没有改动'; return; }
+  if(!n){ $('#formMsg').textContent='没有改动'; FORM_PENDING=null; return; }
+  const labelOf=k=>{ const lab=[...document.querySelectorAll('#formBody [data-key]')].find(e=>e.dataset.key===k);
+    const b=lab&&lab.closest('label').querySelector('b'); return b?b.textContent:k; };
+  const diff=Object.entries(changes).map(([k,v])=>{
+    const el=[...document.querySelectorAll('#formBody [data-key]')].find(e=>e.dataset.key===k);
+    return `${labelOf(k)}（${k}）：${el?el.dataset.raw:'?'} → ${v}`;
+  });
+  if(!FORM_PENDING){
+    FORM_PENDING=changes;
+    $('#formMsg').innerHTML='<b>将修改 '+n+' 项：</b><br>'+diff.map(t=>'· '+t.replace(/</g,'&lt;')).join('<br>')+
+      '<br><span class="sub">再点一次「确认保存」写入文件（会先 node --check 并自动备份）</span>';
+    $('#formSave').textContent='确认保存';
+    return;
+  }
+  FORM_PENDING=null; $('#formSave').textContent='保存改动';
   $('#formMsg').textContent=`保存 ${n} 项中…`;
   const r=await post('/panel/config/form',{changes});
   const msg = r.ok ? ('✓ '+r.msg) : ('✗ '+(r.error||'')+(r.detail?('：'+String(r.detail).slice(0,160)):''));
-  if(r.ok) await loadForm();
+  if(r.ok){ await loadForm(); $('#formSearch').value=''; }
   $('#formMsg').textContent = msg;
 };
 
