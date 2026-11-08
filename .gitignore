@@ -11,3 +11,5 @@ dist/
 package-lock.json
 env.js
 my_config.js
+# 本地改动备份
+*.bak.*
