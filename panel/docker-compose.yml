@@ -1,0 +1,15 @@
+services:
+  lottery-panel:
+    build: .
+    image: lottery-panel:1.0.0
+    container_name: lottery-panel
+    restart: unless-stopped
+    ports:
+      - "5311:5311"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/lottery-docker:/app/lottery
+      - /root/LotteryAutoScript:/app/src
+      - /etc/cron.d:/etc/cron.d
+    environment:
+      - TZ=Asia/Shanghai

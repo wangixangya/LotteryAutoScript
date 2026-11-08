@@ -1,272 +1,148 @@
-# AutoScript
+# B站抽奖自动化 · 二改版
 
-- [AutoScript](#autoscript)
-  - [操作步骤](#操作步骤)
-    - [获取COOKIE](#获取cookie)
-      - [扫码登陆](#扫码登陆)
-      - [手动获取](#手动获取)
-    - [本地运行](#本地运行)
-      - [可执行文件](#可执行文件)
-      - [以源码方式运行](#以源码方式运行)
-    - [Docker](#docker)
-    - [青龙面板](#青龙面板)
-  - [检测中奖](#检测中奖)
-    - [检测未读信息, 已读未读信息](#检测未读信息-已读未读信息)
-    - [中奖推送](#中奖推送)
-  - [设置说明](#设置说明)
-    - [评论验证码识别](#评论验证码识别)
-    - [其他](#其他)
-  - [接口兼容性与离线测试](#接口兼容性与离线测试)
-  - [Awesome](#awesome)
+> 在上游一次性脚本之上，加了一套**常驻 Docker 的可视化控制台**：
+> 把「跑一轮 / 看日志 / 改配置 / 定时 / 中奖 / 数据」全部搬进浏览器。
 
-[Github仓库链接](https://github.com/shanmiteko/LotteryAutoScript)
+<p align="center">
+  <img src="docs/panel.png" alt="控制台截图" width="880">
+</p>
 
-[![Package Node.js project into an executable](https://github.com/shanmiteko/LotteryAutoScript/actions/workflows/pkg.yml/badge.svg)](https://github.com/shanmiteko/LotteryAutoScript/actions/workflows/pkg.yml)
+<p align="center">
+  <img alt="upstream" src="https://img.shields.io/badge/upstream-shanmiteko%2FLotteryAutoScript-111111">
+  <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A518-111111">
+  <img alt="docker" src="https://img.shields.io/badge/docker-ready-111111">
+  <img alt="panel" src="https://img.shields.io/badge/panel-5311-111111">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-111111">
+</p>
 
-[![Build and push Docker images](https://github.com/shanmiteko/LotteryAutoScript/actions/workflows/docker.yml/badge.svg)](https://github.com/shanmiteko/LotteryAutoScript/actions/workflows/docker.yml)
+---
 
-[![Mirror and run GitLab CI](https://github.com/shanmiteko/LotteryAutoScript/actions/workflows/mirror.yml/badge.svg)](https://github.com/shanmiteko/LotteryAutoScript/actions/workflows/mirror.yml)
+## 这是什么
 
-已实现功能:
+这是 [shanmiteko/LotteryAutoScript](https://github.com/shanmiteko/LotteryAutoScript) 的**个人二改分支**。
+抽奖内核保持上游实现不动，本分支只做三件事：
 
-- 监控用户转发
-- 监控话题页面
-- 监控专栏合集
-- 自动点赞、AI评论、乱序转发、@好友、带话题、可选随机动态
-- 直播预约抽奖
-- 检测是否中奖
-  - 已读@
-  - 已读私信
-- 清理动态关注
-- 检查更新
-- 更多功能设置请参考配置文件
+1. **加了一层 Web 控制台** —— `panel/`，Python 标准库单文件后端 + 纯手写 SVG 图表，无框架、无 CDN、断网可用
+2. **定时任务从 root crontab 迁到 `/etc/cron.d`** —— 由面板统一管理，面板重启不影响调度
+3. **补齐运维细节** —— 日志中文标注、CPU/内存/磁盘环形图、运行趋势、中奖记录、操作审计
 
-**声明**: 此脚本仅用于学习和测试，作者本人并不对其负责，请于运行测试完成后自行删除，请勿滥用！
+> 上游是「一次性脚本 + 自己维护 crontab」；二改版是「常驻面板 + 点按钮」。
+> 只想跑脚本直接看上游；想可视化运维再用这个分支。
+> 上游的完整配置说明（COOKIE 获取、推送、青龙等）保留在 **[README.upstream.md](README.upstream.md)**。
 
----------------------------------
+---
 
-## 接口兼容性与离线测试
+## 面板功能
 
-关注列表使用 `x/relation/followings` 分页获取，读取间隔沿用 `get_partition_wait`。如果登录失效、风控或分页不完整，监控会停止，避免把未读取到的用户误判为未关注。动态转发使用 `x/dynamic/feed/create/dyn`，将原有 @ 信息转换为富文本；其他使用旧版 `api.vc.bilibili.com` 的功能不在此次调整范围内。
+| 页面 | 内容 |
+|:--|:--|
+| **概览** | 容器状态、累计轮次、dyid 库、待参与条目、中奖数；近 30 天运行柱状图、dyid 增长曲线、CPU/内存/磁盘三环、CPU 温度、CPU 采样曲线、24h 定时时间线、最近 10 行实时动态 |
+| **运行** | 跑一轮 / 停止 / 中奖检测 / 清理过期数据 / 同步上游 / 重建镜像；按天数清理转发动态；最近运行表 |
+| **日志** | 四个日志切换、中文标注、关键字过滤、自动刷新、一键下载 |
+| **数据** | dyid 计数与查询、lottery_info 明细、导出 dyid.txt / my_config.js / 运行日志 |
+| **账号** | 解析 `env.js` 账号列表（备注 / UID / CLEAR / Cookie 完整性）、B站登录二维码 |
+| **中奖** | winner-check 解析出的「可能中奖」时间线 |
+| **配置** | `my_config.js` 在线编辑，保存前 `node --check` 校验并自动备份；`env.js` 敏感值打码只读 |
+| **设置** | 定时任务编辑（含模板）、安全说明、改密码、配置备份/恢复、QQ 推送测试、面板自更新、上游版本、操作审计 |
 
-安装依赖后可运行 `npm run test:offline`，测试不会连接 B 站或发送动态。真实接口仍可能受 Cookie、风控或 B 站后续变更影响，需使用自己的账号验证。
+---
 
-## 操作步骤
+## 快速开始
 
-**使用前务必阅读此教程和配置文件内注释**
+前提：宿主已装 Docker，且已有 `lottery-auto-script:bili` 镜像（按上游 `script/` 构建）。
 
-右上角<kbd>★ Star</kbd>
+```bash
+git clone https://github.com/wangixangya/LotteryAutoScript.git
+cd LotteryAutoScript/panel
 
-↓↓
+DOCKER_BUILDKIT=0 docker build -t lottery-panel:2.1.0 .
 
-### 获取COOKIE
+docker run -d --name lottery-panel --restart unless-stopped --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /root/lottery-docker:/app/lottery \
+  -v /root/LotteryAutoScript:/app/src \
+  -v /etc/cron.d:/etc/cron.d \
+  -v /:/host:ro \
+  -e TZ=Asia/Shanghai \
+  -e LOTTERY_HOST=/root/lottery-docker \
+  -e HOST_ROOT=/host \
+  lottery-panel:2.1.0
+```
 
-#### 扫码登陆
+打开 `http://<NAS-IP>:5311`，默认密码 `admin`（写在 `panel/panel.conf`）。
 
-在`env.js`文件填`COOKIE`的对应位置写入`"DedeUserID=你的UID"`即可使用`lottery login`扫码自动获取Cookie
+### 挂载点为什么这么写
 
-`COOKIE`中包含`DedeUserID=你的UID`的都会被自动替换
+| 挂载 | 用途 |
+|:--|:--|
+| `/var/run/docker.sock` | 面板用 docker CLI 遥控抽奖容器（面板自己不含抽奖逻辑） |
+| `/root/lottery-docker` | 脚本、`my_config.js`、`env.js`、`data/`、`logs/` |
+| `/etc/cron.d` | 定时写 `lottery-panel` 文件，宿主 cron 每分钟读取 |
+| `/:/host:ro` | 读**真主机**的主机名 / 发行版 / 磁盘；否则读到的全是容器自己（主机名变容器 ID、磁盘变 955GB overlay） |
 
-#### 手动获取
+`--network host` 让面板能直连宿主 `127.0.0.1` 上的 NapCat 推送通道；`-e LOTTERY_HOST` 必须是**宿主路径**，因为 docker CLI 操作的是宿主 docker。
 
-第一种
-进入[B站主页](https://www.bilibili.com/)点击个人头像进入个人主页获取Cookie用于登录
+---
 
-Chrome浏览器:
+## 定时任务
 
-进入个人主页后
-1. `F12`打开控制台
+面板「设置 → 定时任务」写入 `/etc/cron.d/lottery-panel`：
 
-2. F5刷新
+```
+0 8 * * *   root /bin/bash /root/lottery-docker/run.sh >> /var/log/lottery-run.log 2>&1
+0 21 * * *  root /bin/bash /root/lottery-docker/run.sh >> /var/log/lottery-run.log 2>&1
+30 3 * * *  root /bin/bash /root/lottery-docker/sync-and-update.sh >> /var/log/lottery-sync.log 2>&1
+0 9 * * *   root /bin/bash /root/lottery-docker/winner-check.sh >/dev/null 2>&1
+```
 
-3. 根据图中找到network/网络 搜索nav,点击找到的nav,点标头，下滑，找到COOKIE全部复制
-![image](doc/pic/getCookies2.png)
+默认 `08:00 / 21:00` 各跑一轮、`03:30` 同步上游、`09:00` 中奖检测。
 
-注意！！！！！！！！！！！
+> cron 里 `%` 是换行符，面板写入时自动转义成 `\%`。手写 crontab 时写 `date +\%H`，否则命令会被截断。
 
-注意！！！！！！！！！！！
+---
 
-注意！！！！！！！！！！！
+## 目录结构
 
-所有网页端获取的COOKIE，每次打开网页端时，都会有概率刷新COOKIE，点击退出账号则会退出当前COOKIE。可以利用Chrome内核的浏览器创建多用户，专门用于获取COOKIE。
+```
+panel/                 # 二改新增：Web 控制台
+  server.py            # 单文件后端（标准库，零依赖）
+  index.html           # 前端（无框架 / 无 CDN / 手写 SVG 图表）
+  Dockerfile           # alpine + docker-cli + python3
+  recreate.sh          # 重建镜像并替换容器（面板自更新用）
+lib/  script/  test/   # 上游抽奖内核，未改动
+README.upstream.md     # 上游原始文档（COOKIE、推送、青龙等）
+```
 
-注意！！！！！！！！！！！
+---
 
-注意！！！！！！！！！！！
+## 安全提醒
 
-注意！！！！！！！！！！！
+- 面板持有 `docker.sock`，**等同宿主 root**，不要把 5311 暴露到公网
+- 内置限制：只允许内网 / 本机 IP，公网 IP 一律 403；登录连续失败 5 次锁 10 分钟
+- `env.js` 的 COOKIE 只存在宿主文件里，面板只显示长度与字段完整性
+- 默认密码 `admin`，部署后请自行修改
 
+---
 
-第二种
-进入[B站主页](https://www.bilibili.com/)获取Cookie用于登录
+## English
 
-Chrome浏览器:
+A personal fork of [LotteryAutoScript](https://github.com/shanmiteko/LotteryAutoScript) with a
+**self-hosted web console** (`panel/`, Python stdlib backend and hand-rolled SVG charts — no
+frameworks, no CDN, works offline).
 
-1. `F12`打开控制台
+What's added: a persistent Docker panel (overview / run / logs / data / accounts / winners / config /
+settings), cron jobs moved into `/etc/cron.d` and managed from the panel, Chinese log annotations,
+per-host metrics read through a read-only `/:/host` mount, and one-click self-update.
 
-2. 进入Application找到Cookies栏中的SESSDATA将HttpOnly选项**取消**勾选  
+The lottery engine is untouched upstream code. Full upstream documentation lives in
+[README.upstream.md](README.upstream.md).
 
-    (此步骤是为了方便后续采用JS获取Cookies,获取完毕后应再次勾选)
+**Personal modification for learning and self-hosting. Use at your own risk and respect Bilibili's
+terms of service.**
 
-![取消httponly](doc/pic/getCookies.png)
+---
 
-3. 在Console中复制以下代码回车  
+## 致谢
 
-    ```js
-    /** 自动复制到粘贴板 */
-    document
-      .cookie
-      .split(/\s*;\s*/)
-      .map(it => it.split('='))
-      .filter(it => ['DedeUserID','bili_jct', 'SESSDATA', 'buvid3'].indexOf(it[0]) > -1)
-      .map(it => it.join('='))
-      .join('; ')
-      .split()
-      .forEach(it => copy(it) || console.log(it))
-    ```
-
-也可以采用**其他方式获取**所需的Cookie
-
-只需含有 `DedeUserID=...;SESSDATA=...;bili_jct=...;buvid3=...` 即可
-
-buvid3亦可不填 使用随机生成值
-
-(分号分割, 不要换行, 顺序随意)
-
-↓↓
-
-### 本地运行
-
-#### 可执行文件
-
-1. [[下载](https://github.com/shanmiteko/LotteryAutoScript/releases)|[cnpmjs镜像下载](https://github.com.cnpmjs.org/shanmiteko/LotteryAutoScript/releases)|[Fastgit镜像下载](https://hub.fastgit.org/shanmiteko/LotteryAutoScript/releases)]压缩包并解压后
-
-   ```
-    ~/nlts-linux-x64
-    => tree
-    .
-    ├── env.js          (便捷设置环境变量和多账号参数)
-    ├── lottery         (可执行文件)
-    ├── my_config.js    (自定义设置文件) (!使用前必读)
-    └── README.md       (说明文件)
-   ```
-
-2. 用记事本或其他编辑器修改`env.js`和`my_config.js`文件(右键选择用记事本打开)
-3. 在`env.js`中填入`COOKIE`和推送参数
-4. 在`my_config.js`中自定义设置
-5. 在当前目录下**打开终端**运行可执行文件`lottery`(勿直接点击`lottery`)
-  - windows 可直接点击对应的`*.bat`文件
-
-    ```
-    用法: lottery [OPTIONS]
-    
-    OPTIONS:
-            start  启动抽奖
-            check  中奖检查
-            acount 查看帐号信息
-            clear  清理动态和关注
-            update 检查更新
-            login  扫码登录更新CK
-            help   帮助信息
-    ```
-
-1. 运行截图
-    ![lottery_start](doc/pic/lottery_start.png)
-
-#### 以源码方式运行
-
-[点击跳转](doc/run_use_sc.md)
-
-----------------------------------------
-
-### Docker
-
-[点击跳转](doc/run_use_docker.md)
-
-----------------------------------------
-
-### 青龙面板
-
-[点击跳转](doc/run_use_ql.md)
-
-----------------------------------------
-
-## 检测中奖
-
-### 检测未读信息, 已读未读信息
-
-判断依据
-
-- 通过`@`信息判断
-
-- 通过私信判断
-
-关键词有限 可能会有**漏掉**的或**误报**
-
-可在设置开启AI判断
-
-### 中奖推送
-
-> 填写在env.js内
-
-以下是支持的推送方式
-
-|        Name        |                                        归属                                        | 说明                                                                                                                                                                                                                        |
-| :----------------: | :--------------------------------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|      `SCKEY`       |                          微信server酱推送(于2021/4月下线)                          | server酱的微信通知[官方文档](http://sc.ftqq.com/3.version)                                                                                                                                                                  |
-|     `SENDKEY`      |                             微信server酱(Turbo版)推送                              | [获取SENDKEY](https://sct.ftqq.com/sendkey) [选择消息通道](https://sct.ftqq.com/forward)                                                                                                                                    |
-|    `BARK_PUSH`     | [BARK推送](https://apps.apple.com/us/app/bark-customed-notifications/id1403753865) | IOS用户下载BARK这个APP,填写内容是app提供的`设备码`，例如：<https://api.day.app/123> ，那么此处的设备码就是`123`，再不懂看 [这个图](doc/pic/bark.jpg)（注：支持自建填完整链接即可）                                          |
-|    `BARK_SOUND`    | [BARK推送](https://apps.apple.com/us/app/bark-customed-notifications/id1403753865) | bark推送声音设置，例如`choo`,具体值请在`bark`-`推送铃声`-`查看所有铃声`                                                                                                                                                     |
-|   `PUSHDEER_URL`   |                  [Pushdeer](https://github.com/easychen/pushdeer)                  | 推送api 默认: <https://api2.pushdeer.com/message/push>                                                                                                                                                                      |
-| `PUSHDEER_PUSHKEY` |                  [Pushdeer](https://github.com/easychen/pushdeer)                  | PushKey                                                                                                                                                                                                                     |
-|   `TG_BOT_TOKEN`   |                                    telegram推送                                    | tg推送(需设备可连接外网),`TG_BOT_TOKEN`和`TG_USER_ID`两者必需,填写自己申请[@BotFather](https://t.me/BotFather)的Token,如`10xxx4:AAFcqxxxxgER5uw` , [具体教程](doc/TG_PUSH.md)                                               |
-|    `TG_USER_ID`    |                                    telegram推送                                    | tg推送(需设备可连接外网),`TG_BOT_TOKEN`和`TG_USER_ID`两者必需,填写[@getuseridbot](https://t.me/getuseridbot)中获取到的纯数字ID, [具体教程](doc/TG_PUSH.md)                                                                  |
-|  `TG_PROXY_HOST`   |                                 Telegram 代理的 IP                                 | 代理类型为 http。例子：http代理 <http://127.0.0.1:1080> 则填写 127.0.0.1                                                                                                                                                    |
-|  `TG_PROXY_PORT`   |                                Telegram 代理的端口                                 | 例子：http代理 <http://127.0.0.1:1080> 则填写 1080                                                                                                                                                                          |
-|   `DD_BOT_TOKEN`   |                                      钉钉推送                                      | 钉钉推送(`DD_BOT_TOKEN`和`DD_BOT_SECRET`两者必需)[官方文档](https://ding-doc.dingtalk.com/doc#/serverapi2/qf2nxq) ,只需`https://oapi.dingtalk.com/robot/send?access_token=XXX` 等于`=`符号后面的XXX即可                     |
-|  `DD_BOT_SECRET`   |                                      钉钉推送                                      | (`DD_BOT_TOKEN`和`DD_BOT_SECRET`两者必需) ,密钥，机器人安全设置页面，加签一栏下面显示的SEC开头的`SECXXXXXXXXXX`等字符 , 注:钉钉机器人安全设置只需勾选`加签`即可，其他选项不要勾选,再不懂看 [这个图](doc/pic/DD_bot.png)     |
-| `FS_BOT_WEBHOOK`   |                                    飞书机器人                                     | 飞书机器人 webhook，创建自定义机器人后复制 webhook 地址，[官方文档](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)                                                                                     |
-|  `FS_BOT_SECRET`   |                                    飞书机器人                                     | 飞书机器人安全设置中的签名密钥（若开启“签名校验”则必填），[官方文档](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)                                                                                    |
-|  `IGOT_PUSH_KEY`   |                                      iGot推送                                      | iGot聚合推送，支持多方式推送，确保消息可达。 [参考文档](https://wahao.github.io/Bark-MP-helper )                                                                                                                            |
-|     `QQ_SKEY`      |                                酷推(Cool Push)推送                                 | 推送所需的Skey,登录后获取Skey [参考文档](https://cp.xuthus.cc/)                                                                                                                                                             |
-|     `QQ_MODE`      |                                酷推(Cool Push)推送                                 | 推送方式(send或group或者wx，默认send) [参考文档](https://cp.xuthus.cc/)                                                                                                                                                     |
-|     `QYWX_AM`      |                                    企业微信应用                                    | 第一个值是企业id，第二个值是secret，第三个值@all(或者成员id)，第四个值是AgentID (逗号分割) 可查看此[教程](http://note.youdao.com/s/HMiudGkb) [官方文档](https://developer.work.weixin.qq.com/document/path/90236)           |
-|     `QYWX_KEY`     |                                  企业微信Bot推送                                   | 密钥，企业微信推送 webhook 后面的 key [详见官方说明文档](https://work.weixin.qq.com/api/doc/90000/90136/91770)                                                                                                              |
-| `PUSH_PLUS_TOKEN`  |                                    pushplus推送                                    | 微信扫码登录后一对一推送或一对多推送下面的token(您的Token) [官方网站](http://pushplus.hxtrip.com/)                                                                                                                          |
-|  `PUSH_PLUS_USER`  |                                    pushplus推送                                    | 一对多推送的“群组编码”（一对多推送下面->您的群组(如无则新建)->群组编码）注:(1、需订阅者扫描二维码 2、如果您是创建群组所属人，也需点击“查看二维码”扫描绑定，否则不能接受群组消息推送)，只填`PUSH_PLUS_TOKEN`默认为一对一推送 |
-|   `QMSG_SOCKET`    |                      [Qmsg酱](https://qmsg.zendee.cn)私聊推送                      | 私有云IP:私有云WEB端口 默认`qmsg.zendee.cn`                                                                                                                                                                                 |
-|     `QMSG_KEY`     |                      [Qmsg酱](https://qmsg.zendee.cn)私聊推送                      | [Qmsg注册](https://qmsg.zendee.cn/login.html)                                                                                                                                                                               |
-|     `QMSG_QQ`      |                       私聊消息推送接口，指定需要接收消息的QQ                       | 指定的QQ号必须在你的[管理台](https://qmsg.zendee.cn/me.html)已添加                                                                                                                                                          |
-|   `NAPCAT_URL`    |                                  本地 NapCat QQ 通知                                 | OneBot HTTP 地址，例如 `http://127.0.0.1:3000`，与 `NAPCAT_TOKEN`、`NAPCAT_QQ` 同时填写 |
-| `NAPCAT_TOKEN`    |                                  本地 NapCat QQ 通知                                 | NapCat OneBot HTTP token |
-|   `NAPCAT_QQ`     |                                  本地 NapCat QQ 通知                                 | 接收中奖通知的 QQ 号 |
-|    `SMTP_HOST`     |                                      电子邮件                                      | smtp服务器的主机名 如: `smtp.qq.com`                                                                                                                                                                                        |
-|    `SMTP_PORT`     |                                      电子邮件                                      | smtp服务器的端口 如: `465`                                                                                                                                                                                                  |
-|    `SMTP_USER`     |                                      电子邮件                                      | 发送方的电子邮件   如: `xxxxxxxxx@qq.com`                                                                                                                                                                                   |
-|    `SMTP_PASS`     |                                      电子邮件                                      | smtp服务对应的授权码                                                                                                                                                                                                        |
-|   `SMTP_TO_USER`   |                                      电子邮件                                      | 接收方电子邮件                                                                                                                                                                                                              |
-|    `GOTIFY_URL`    |                                     gotify推送                                     | gotify消息推送地址(例如 http://localhost:8008/message)，[官方文档](https://gotify.net/docs/)                                                                                                                                |
-|  `GOTIFY_APPKEY`   |                                     gotify推送                                     | 一个gotify application的token，[官方文档](https://gotify.net/docs/)                                                                                                                                                         |
-
-----------------------------------------
-
-## 设置说明
-
-### 评论验证码识别
-
-[点击跳转](doc/chat_captcha_orc.md)
-
-### 其他
-
-详见[env.example.js](./env.example.js)文件内部注释
-
-详见[my_config.example.js](./my_config.example.js)文件内部注释
-
-----------------------------------------
-
-## Awesome
-相关项目
-
-- [LotteryAutoScript_Station](https://github.com/spiritLHLS/LotteryAutoScript_Station) - [@spiritLHL](https://github.com/spiritLHLS)
-- [sync_lottery](https://github.com/spiritLHLS/sync_lottery) - [@spiritLHL](https://github.com/spiritLHLS)
-- [BDSF](https://github.com/spiritLHLS/BDSF) - [@spiritLHL](https://github.com/spiritLHLS)
+- 内核：[shanmiteko/LotteryAutoScript](https://github.com/shanmiteko/LotteryAutoScript) · MIT
+- 面板：本分支自建 · MIT
