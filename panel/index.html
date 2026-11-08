@@ -247,7 +247,10 @@ tr:last-child td{border-bottom:0}
 
   <div class="sec" id="sec-win">
     <div class="card">
-      <h3>中奖 / 可能中奖记录</h3>
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">中奖 / 可能中奖记录</h3>
+        <a class="btn sm" href="/panel/wins.csv" download>导出 CSV</a>
+      </div>
       <div class="sub" style="margin-bottom:10px">来源 winner-check.log，检测到"可能中奖"会同时推 QQ。</div>
       <table><thead><tr><th style="width:160px">时间</th><th style="width:130px">标签</th><th>内容</th></tr></thead><tbody id="winTb"></tbody></table>
     </div>
@@ -334,6 +337,17 @@ tr:last-child td{border-bottom:0}
           <button class="btn" id="bkDataBtn">备份数据（dyid + 抽奖信息）</button>
           <span class="sub" id="bkMsg"></span></div>
         <table style="margin-top:10px"><tbody id="bkTb"></tbody></table>
+      </div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">通知渠道</h3>
+          <div class="row" style="gap:6px">
+            <button class="btn sm" id="ntAll">全部测试</button>
+            <button class="btn sm primary" id="ntSave">保存通知设置</button>
+          </div>
+        </div>
+        <div class="sub" id="ntMsg" style="margin:6px 0">勾选要用的渠道，填参数后保存；密码类留空表示不修改</div>
+        <div id="ntBody"><div class="sub">加载中…</div></div>
       </div>
       <div class="card">
         <h3>通知 · 面板 · 上游</h3>
@@ -607,8 +621,14 @@ $('#qrBtn').onclick=async()=>{ const r=await post('/panel/qr/refresh'); $('#qrMs
 async function loadWin(){
   const st=await api('/panel/stats');
   $('#winTb').innerHTML=(st.wins||[]).slice().reverse().map(w=>
-    `<tr><td class="mono">${w.time}</td><td><span class="pill">${w.tag}</span></td><td>${w.msg}</td></tr>`).join('')
+    `<tr><td class="mono">${w.time}</td><td><span class="pill">${w.tag}</span></td><td>${w.msg}
+       <div style="margin-top:4px"><button class="btn sm" data-copy="${encodeURIComponent(w.msg||'')}">复制</button>
+       ${(m=>m?` <a class="btn sm" href="https://t.bilibili.com/${m}" target="_blank" rel="noopener">看动态</a>`:'')(((w.msg||'').match(/\d{18,20}/)||[])[0])}</div></td></tr>`).join('')
     ||'<tr><td colspan="3" class="sub">还没有中奖记录</td></tr>';
+  document.querySelectorAll('#winTb [data-copy]').forEach(b=>b.onclick=()=>{
+    navigator.clipboard.writeText(decodeURIComponent(b.dataset.copy)).then(()=>{
+      b.textContent='已复制'; setTimeout(()=>b.textContent='复制',1500); });
+  });
 }
 
 let CONF_MODE = localStorage.getItem('confMode') || 'form';
@@ -723,6 +743,7 @@ $('#cfgSave').onclick=async()=>{
 };
 
 async function loadSet(){
+  loadNotify();
   const [d,b,sys,up,au]=await Promise.all([api('/panel/status'),api('/panel/backups'),api('/panel/system'),api('/panel/upstream'),api('/panel/audit')]);
   $('#upTb').innerHTML=up.ok?`<tr><td class="muted">上游分支</td><td class="mono">${up.branch||'-'}</td></tr>
     <tr><td class="muted">最新提交</td><td class="mono">${up.head||'-'}</td></tr>
@@ -761,6 +782,46 @@ document.querySelectorAll('[data-tpl]').forEach(b=>b.onclick=()=>{
 $('#pwBtn').onclick=async()=>{
   const r=await post('/panel/password',{password:$('#newPw').value});
   $('#pwMsg').textContent=r.ok?('✓ '+r.msg):('✗ '+r.error);
+};
+async function loadNotify(){
+  const d=await api('/panel/notify');
+  $('#ntBody').innerHTML=(d.channels||[]).map(c=>`
+    <div class="chk" style="align-items:center;border-bottom:1px solid #f2f2f2;padding:8px 0">
+      <input type="checkbox" data-nch="${c.key}" ${c.enabled?'checked':''}>
+      <div style="flex:1">
+        <b style="font-weight:500">${c.name}</b>${c.hint?`<span class="sub" style="font-size:12px"> · ${c.hint}</span>`:''}
+        <div class="row" style="gap:6px;margin-top:5px;flex-wrap:wrap">
+          ${c.fields.map(f=>`<input type="text" data-nk="${c.key}.${f.k}" placeholder="${f.label}${f.set?'（'+f.value+'）':''}" style="width:180px">`).join('')}
+          <button class="btn sm" data-ntest="${c.key}">测试</button>
+          <span class="sub" data-nres="${c.key}" style="font-size:12px"></span>
+        </div>
+      </div>
+    </div>`).join('') || '<div class="sub">没有可用渠道</div>';
+  document.querySelectorAll('[data-ntest]').forEach(b=>b.onclick=async()=>{
+    const k=b.dataset.ntest; b.disabled=true; b.textContent='发送中…';
+    const r=await post('/panel/notify/test',{key:k});
+    document.querySelector(`[data-nres="${k}"]`).textContent = r.ok? '✓ 已发送' : ('✗ '+(r.msg||r.error||'失败'));
+    b.disabled=false; b.textContent='测试';
+  });
+}
+$('#ntSave').onclick=async()=>{
+  const ch={};
+  document.querySelectorAll('[data-nch]').forEach(cb=>{
+    const k=cb.dataset.nch; ch[k]={enabled:cb.checked, fields:{}};
+    document.querySelectorAll(`[data-nk^="${k}."]`).forEach(i=>{
+      if(i.value.trim()) ch[k].fields[i.dataset.nk.split('.')[1]]=i.value.trim(); });
+  });
+  const r=await post('/panel/notify',{channels:ch});
+  $('#ntMsg').textContent = r.ok? ('✓ '+r.msg+'（已启用 '+r.enabledCount+' 个）') : ('✗ '+(r.error||'失败'));
+  if(r.ok) loadNotify();
+};
+$('#ntAll').onclick=async()=>{
+  const keys=[...document.querySelectorAll('[data-nch]')].filter(c=>c.checked).map(c=>c.dataset.nch);
+  if(!keys.length){ $('#ntMsg').textContent='先勾选要用的渠道'; return; }
+  for(const k of keys){ const r=await post('/panel/notify/test',{key:k});
+    const el=document.querySelector(`[data-nres="${k}"]`);
+    if(el) el.textContent = r.ok? '✓ 已发送' : ('✗ '+(r.msg||r.error||'失败')); }
+  $('#ntMsg').textContent='已逐个测试完成';
 };
 $('#notifyBtn').onclick=async()=>{ const r=await post('/panel/notify-test'); $('#opsMsg').textContent=r.ok?('✓ '+r.msg):('✗ '+r.error); };
 $('#suBtn').onclick=async()=>{ if(!confirm('重建面板会 build 新镜像并替换容器，约 30–60 秒不可用，继续？')) return;

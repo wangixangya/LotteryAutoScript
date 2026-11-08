@@ -18,7 +18,7 @@ LOG="$DIR/selfupdate.log"
       -v /root/LotteryAutoScript:/app/src \
       -v /etc/cron.d:/etc/cron.d \
       -v /:/host:ro \
-      -v /root/.hermes/scripts:/hscripts:ro \
+      -v /root/.hermes/scripts:/hscripts:ro -v /root/.hermes/.env:/secrets/hermes.env:ro \
       -e TZ=Asia/Shanghai -e LOTTERY_HOST=/root/lottery-docker -e HOST_ROOT=/host \
       "$IMG"
     echo "[$(date '+%F %T')] done"
@@ -27,3 +27,11 @@ LOG="$DIR/selfupdate.log"
     exit 1
   fi
 } >>"$LOG" 2>&1
+
+sleep 3
+if [ "$(docker inspect -f '{{.State.Running}}' lottery-panel 2>/dev/null)" != "true" ]; then
+  echo "[$(date '+%F %T')] 容器未能启动，最后 20 行日志：" | tee -a "$LOG"
+  docker logs --tail 20 lottery-panel 2>&1 | tee -a "$LOG"
+  exit 1
+fi
+echo "[OK] lottery-panel 已启动（$IMG）"

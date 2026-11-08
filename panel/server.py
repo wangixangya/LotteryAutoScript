@@ -8,7 +8,7 @@
   由宿主 cron 执行，面板重启不影响调度。
 - 可视化数据来源：日志解析（每轮/每中奖）+ 每日快照（panel-stats.json）+ 内存采样（CPU/内存曲线）。
 """
-import glob, http.server, ipaddress, json, os, re, shutil, socketserver, subprocess, urllib.parse
+import glob, http.server, ipaddress, json, os, re, shutil, socketserver, subprocess, urllib.parse, urllib.request
 import threading, time, secrets
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -267,6 +267,9 @@ def _normalize_time(text):
         h = int(hh) % 12 + (12 if ap.upper() == "PM" else 0)
         return f"{y}-{int(mo):02d}-{int(d):02d} {h:02d}:{int(mm):02d}"
     return re.sub(r"(\d{1,2})/(\d{1,2})/(\d{4}),?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)", rep, text)
+
+
+_WIN_CACHE = {"key": None, "val": None}
 
 
 def winners():
@@ -532,6 +535,171 @@ def cfg_apply(changes):
     os.replace(tmp, path)
     return True, "已保存：" + "、".join(done) + "（下一轮生效）", ""
 
+# ---------- 通知渠道 ----------
+NOTIFY = os.path.join(LOTTERY, "panel-notify.json")
+
+CHANNELS = [
+    {"key": "qq_private", "name": "QQ 私聊", "fields": [
+        {"k": "user_id", "label": "QQ 号", "ph": "949194446"}]},
+    {"key": "qq_group", "name": "QQ 群", "fields": [
+        {"k": "group_id", "label": "群号", "ph": "123456789"}]},
+    {"key": "telegram", "name": "Telegram", "fields": [
+        {"k": "chat_id", "label": "会话 ID", "ph": "1910099858"},
+        {"k": "token", "label": "Bot Token", "ph": "留空则用 Hermes 的"}]},
+    {"key": "wecom_bot", "name": "企业微信机器人", "fields": [
+        {"k": "url", "label": "Webhook 地址", "ph": "https://qyapi.weixin.qq.com/..."}]},
+    {"key": "bark", "name": "Bark（iOS）", "fields": [
+        {"k": "url", "label": "推送地址", "ph": "https://api.day.app/你的key"}]},
+    {"key": "serverchan", "name": "Server酱", "fields": [
+        {"k": "key", "label": "SendKey", "ph": "SCT..."}]},
+    {"key": "webhook", "name": "通用 Webhook", "fields": [
+        {"k": "url", "label": "URL", "ph": "https://.../hook"},
+        {"k": "template", "label": "请求体模板", "ph": '{"text":"{msg}"}'}]},
+]
+
+
+def _hermes_env(key, default=""):
+    try:
+        path = "/secrets/hermes.env" if os.path.exists("/secrets/hermes.env") else "/root/.hermes/.env"
+        for ln in open(path, "r", encoding="utf-8", errors="ignore"):
+            if ln.startswith(key + "="):
+                return ln.split("=", 1)[1].split("#")[0].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return default
+
+
+def notify_conf():
+    try:
+        return json.loads(rd(NOTIFY) or "{}")
+    except Exception:
+        return {}
+
+
+def notify_save(conf):
+    wr(NOTIFY, json.dumps(conf, ensure_ascii=False, indent=1))
+
+
+def _mask(v):
+    if not v:
+        return ""
+    v = str(v)
+    return v[:4] + "…" + v[-4:] if len(v) > 12 else "已设置"
+
+
+def notify_view():
+    conf = notify_conf()
+    out = []
+    for ch in CHANNELS:
+        cur = conf.get(ch["key"], {})
+        fields = []
+        for f in ch["fields"]:
+            val = cur.get(f["k"], "")
+            fields.append({"k": f["k"], "label": f["label"], "ph": f.get("ph", ""),
+                           "value": _mask(val), "set": bool(val)})
+        hint = ""
+        if ch["key"] == "telegram" and not cur.get("token"):
+            hint = "已检测到 Hermes 的 Bot Token，可直接用"
+        if ch["key"] == "qq_private" and not cur.get("user_id"):
+            hint = "走本机 napcat（127.0.0.1:3000）"
+        out.append({"key": ch["key"], "name": ch["name"], "enabled": bool(cur.get("enabled")),
+                    "fields": fields, "hint": hint})
+    return {"channels": out, "enabledCount": sum(1 for c in out if c["enabled"])}
+
+
+def _send_one(key, conf, msg):
+    c = conf.get(key, {})
+    if key == "qq_private":
+        uid = c.get("user_id") or ""
+        if not uid:
+            return False, "未填 QQ 号"
+        sender = "/hscripts/qq_ws_send.py"
+        if not os.path.exists(sender):
+            return False, "缺少 qq_ws_send.py"
+        out = shq(["python3", sender, msg, "--user", uid] if "--user" in rd(sender) else ["python3", sender, msg], 60)
+        return "OK" in out, out[-160:]
+    if key == "qq_group":
+        gid = c.get("group_id") or ""
+        if not gid:
+            return False, "未填群号"
+        body = json.dumps({"group_id": int(gid), "message": msg}, ensure_ascii=False)
+        return _http_post("http://127.0.0.1:3000/send_group_msg", body, {})
+    if key == "telegram":
+        tok = c.get("token") or _hermes_env("TELEGRAM_BOT_TOKEN")
+        chat = c.get("chat_id") or ""
+        if not tok or not chat:
+            return False, "缺 token 或 chat_id"
+        proxy = _hermes_env("TELEGRAM_PROXY")
+        try:
+            body = urllib.parse.urlencode({"chat_id": chat, "text": msg}).encode()
+            req = urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body)
+            if proxy:
+                op = urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy, "http": proxy}))
+                r = op.open(req, timeout=20)
+            else:
+                r = urllib.request.urlopen(req, timeout=20)
+            txt = r.read().decode("utf-8", "ignore")
+            return '"ok":true' in txt.replace(" ", ""), txt[-160:]
+        except Exception as e:
+            return False, str(e)[:160]
+    if key == "wecom_bot":
+        url = c.get("url") or ""
+        if not url:
+            return False, "未填 Webhook"
+        return _http_post(url, json.dumps({"msgtype": "text", "text": {"content": msg}}, ensure_ascii=False), {})
+    if key == "bark":
+        url = (c.get("url") or "").rstrip("/")
+        if not url:
+            return False, "未填推送地址"
+        return _http_post(url, json.dumps({"title": "B站抽奖", "body": msg}, ensure_ascii=False), {})
+    if key == "serverchan":
+        k = c.get("key") or ""
+        if not k:
+            return False, "未填 SendKey"
+        return _http_post(f"https://sctapi.ftqq.com/{k}.send",
+                          urllib.parse.urlencode({"title": "B站抽奖", "desp": msg}).encode(), {})
+    if key == "webhook":
+        url = c.get("url") or ""
+        if not url:
+            return False, "未填 URL"
+        tpl = c.get("template") or '{"text":"{msg}"}'
+        body = tpl.replace("{msg}", msg.replace('"', '\"').replace("\n", "\\n"))
+        return _http_post(url, body, {"Content-Type": "application/json"})
+    return False, "未知渠道"
+
+
+def _http_post(url, body, headers):
+    try:
+        data = body.encode() if isinstance(body, str) else body
+        req = urllib.request.Request(url, data=data, headers=headers or {}, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            txt = r.read().decode("utf-8", "ignore")
+            ok = r.status < 400
+            if '"errcode":0' in txt.replace(" ", "") or '"code":200' in txt.replace(" ", ""):
+                ok = True
+            return ok, txt[-160:]
+    except Exception as e:
+        return False, str(e)[:160]
+
+
+def send_notify(msg, only=None):
+    conf = notify_conf()
+    res = []
+    for ch in CHANNELS:
+        k = ch["key"]
+        if only and k != only:
+            continue
+        c = conf.get(k, {})
+        if not only and not c.get("enabled"):
+            continue
+        if only and not c.get("enabled") and not c:
+            pass
+        ok, out = _send_one(k, conf, msg)
+        res.append({"key": k, "name": ch["name"], "ok": ok, "out": out})
+    return res
+
+
+
 # ---------- 连续失败 / 零增长告警 ----------
 ALERT = os.path.join(LOTTERY, "panel-alert.json")
 
@@ -577,9 +745,9 @@ def alert_tick():
     if msg:
         last = float(s0.get("notifiedAt") or 0)
         if time.time() - last > 6 * 3600:
-            sent, out = _qq_send(msg)
+            rr = send_notify(msg)
             s0["notifiedAt"] = time.time()
-            s0["notifyResult"] = ("sent" if sent else "fail") + " " + out[-80:]
+            s0["notifyResult"] = "; ".join(f"{r['name']}:{'ok' if r['ok'] else 'fail'}" for r in rr) or "无可用渠道"
     try:
         wr(ALERT, json.dumps(s0, ensure_ascii=False))
     except Exception:
@@ -868,6 +1036,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.j(200, {"ok": f.get("ok", False), "why": f.get("why", ""),
                                 "groups": cfg_grouped(f.get("fields", [])) if f.get("ok") else [],
                                 "count": len(f.get("fields", []))})
+        if p == "/panel/notify":
+            return self.j(200, notify_view())
+        if p == "/panel/wins.csv":
+            rows = [["时间", "级别", "标签", "内容", "动态链接"]]
+            for w in winners():
+                mid = re.search(r"(\d{18,20})", w["msg"] or "")
+                rows.append([w["time"], w["level"], w["tag"], (w["msg"] or "").replace("\n", " ").replace("\r", ""),
+                             ("https://t.bilibili.com/" + mid.group(1)) if mid else ""])
+            buf = "\ufeff" + "\r\n".join(",".join('"' + str(c).replace('"', '""') + '"' for c in r) for r in rows)
+            data = buf.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="wins.csv"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if p == "/panel/checkup":
             return self.j(200, checkup())
         if p == "/panel/accounts":
@@ -940,6 +1125,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             days = str(d.get("days", "")).strip()
             ok = spawn("clear.sh", ([days] if days else []) + ["--no-wait"])
             return self.j(200, {"ok": True, "msg": f"已开始清理动态（{days or '默认'} 天，--no-wait）"}) if ok else self.j(400, {"error": "缺少 clear.sh"})
+        if p == "/panel/notify":
+            conf = notify_conf()
+            for k, v in (d.get("channels") or {}).items():
+                cur = conf.get(k, {})
+                cur["enabled"] = bool(v.get("enabled"))
+                for fk, fv in (v.get("fields") or {}).items():
+                    if str(fv).strip():
+                        cur[fk] = str(fv).strip()
+                conf[k] = cur
+            notify_save(conf)
+            return self.j(200, {"ok": True, "msg": "通知设置已保存", **notify_view()})
+        if p == "/panel/notify/test":
+            key = d.get("key")
+            res = send_notify(f"【B站抽奖】通知测试 · {time.strftime('%m-%d %H:%M')} · 面板 v{VERSION}", only=key)
+            if not res:
+                return self.j(200, {"ok": False, "error": "该渠道未配置"})
+            r = res[0]
+            return self.j(200, {"ok": r["ok"], "msg": ("已发送（" + r["name"] + "）") if r["ok"] else ("失败：" + r["out"])})
         if p == "/panel/cleanup":
             return self.j(200, {"ok": True, "msg": "已开始清理过期数据"}) if spawn("cleanup-expired.sh") else self.j(400, {"error": "缺少 cleanup-expired.sh"})
         if p == "/panel/wcheck":
