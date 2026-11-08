@@ -82,7 +82,7 @@ tr:last-child td{border-bottom:0}
   <span class="tag" id="stateTag">—</span>
   <span class="ver" id="verText"></span>
   <div class="sp"></div>
-  <span class="sub" id="clock"></span>
+  <a class="btn sm" id="logoutBtn" href="#" style="margin-right:10px">退出</a><span class="sub" id="clock"></span>
 </header>
 
 <nav>
@@ -877,6 +877,7 @@ $('#loginBtn').onclick=async()=>{
   else { let m='密码不对'; try{ const j=await r.json(); if(j.error) m=j.error; }catch(e){} $('#loginErr').textContent=m; }
 };
 $('#pw').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#loginBtn').click(); });
+$('#logoutBtn').onclick=async(e)=>{ e.preventDefault(); await post('/panel/logout',{}); location.reload(); };
 
 function clock(){ $('#clock').textContent=new Date().toLocaleString('zh-CN',{hour12:false}); }
 function boot(){ clock(); setInterval(clock,1000); showSec('dash'); setInterval(()=>{ if(SEC==='dash') loadDash(); },20000); }

@@ -138,6 +138,11 @@ def set_password(new):
     else:
         txt = txt.rstrip("\n") + f"\nPANEL_PASSWORD={new}\n"
     wr(CONF, txt)
+    try:
+        with _LOCK:
+            SESSIONS.clear()          # 改密码即让所有旧登录失效
+    except Exception:
+        pass
 
 
 # ---------- 系统信息 ----------
@@ -1237,6 +1242,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 conf[k] = cur
             notify_save(conf)
             return self.j(200, {"ok": True, "msg": "通知设置已保存", **notify_view()})
+        if p == "/panel/logout":
+            m = re.search(r"sid=([0-9a-f]+)", self.headers.get("Cookie") or "")
+            if m:
+                with _LOCK:
+                    SESSIONS.pop(m.group(1), None)
+            return self._send(200, json.dumps({"ok": True}), "application/json; charset=utf-8",
+                              [("Set-Cookie", "sid=; Path=/; Max-Age=0")])
         if p == "/panel/maintain":
             if not d.get("confirm"):
                 return self.j(400, {"error": "需要 confirm"})
