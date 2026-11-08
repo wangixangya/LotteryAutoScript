@@ -53,7 +53,7 @@ tr:last-child td{border-bottom:0}
 .seg button.on{background:#0a0a0a;color:#fff}
 .frm{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px 16px;margin-top:8px}
 .fld{display:flex;align-items:center;gap:8px;border-bottom:1px solid #f1f1f1;padding:7px 0}
-.fld label{flex:0 0 168px;font:12.5px var(--mono);color:#3f3f46;overflow:hidden;text-overflow:ellipsis}
+.fld label{gap:6px;flex-wrap:wrap;flex:0 0 210px;font:12.5px var(--mono);color:#3f3f46;overflow:hidden;text-overflow:ellipsis}
 .fld input[type=text],.fld input[type=number]{flex:1;min-width:60px;padding:6px 8px;font-size:12.8px}
 .fld input[type=checkbox]{width:16px;height:16px;accent-color:#0a0a0a}
 .fld .tagc{font-size:11px;color:var(--dim)}
@@ -97,8 +97,8 @@ tr:last-child td{border-bottom:0}
     <div class="grid g4" style="margin-bottom:12px">
       <div class="card"><h3>容器</h3><div class="kpi" id="kState">—</div><div class="sub" id="kStateSub">—</div></div>
       <div class="card"><h3>累计运行</h3><div class="kpi"><span id="kRuns">—</span><small>轮</small></div><div class="sub" id="kSkip">—</div></div>
-      <div class="card"><h3>已知抽奖 ID</h3><div class="kpi" id="kDyid">—</div><div class="sub">dyid 去重库</div></div>
-      <div class="card"><h3>待参与条目</h3><div class="kpi" id="kInfo">—</div><div class="sub">lottery_info</div></div>
+      <div class="card"><h3>已知动态 ID</h3><div class="kpi" id="kDyid">—</div><div class="sub">已参与动态去重库（dyid）</div></div>
+      <div class="card"><h3>待参与抽奖</h3><div class="kpi" id="kInfo">—</div><div class="sub">lottery_info 待处理</div></div>
       <div class="card"><h3>中奖记录</h3><div class="kpi" id="kWin">—</div><div class="sub">检测到"可能中奖"</div></div>
     </div>
 
@@ -109,7 +109,7 @@ tr:last-child td{border-bottom:0}
         <div class="legend"><span><i style="background:#0a0a0a"></i>正常跑完</span><span><i style="background:#d4d4d8"></i>跳过（已在跑）</span></div>
       </div>
       <div class="card">
-        <h3>dyid 库增长</h3>
+        <h3>已知动态 ID 增长</h3>
         <div id="chartGrowth"></div>
         <div class="legend"><span><i style="background:#0a0a0a"></i>已知抽奖 ID 数量</span></div>
       </div>
@@ -187,18 +187,18 @@ tr:last-child td{border-bottom:0}
 
   <div class="sec" id="sec-data">
     <div class="grid g4" style="margin-bottom:12px">
-      <div class="card"><h3>dyid 条数</h3><div class="kpi" id="dCount">—</div><div class="sub" id="dSize">—</div></div>
-      <div class="card"><h3>条目总数</h3><div class="kpi" id="dInfo">—</div><div class="sub">lottery_info 各文件之和</div></div>
-      <div class="card"><h3>最新 dyid</h3><div class="kpi" id="dLatest" style="font-size:15px">—</div><div class="sub">最近写入</div></div>
+      <div class="card"><h3>动态 ID 条数</h3><div class="kpi" id="dCount">—</div><div class="sub" id="dSize">—</div></div>
+      <div class="card"><h3>条目总数</h3><div class="kpi" id="dInfo">—</div><div class="sub">各文件条目合计</div></div>
+      <div class="card"><h3>最新动态 ID</h3><div class="kpi" id="dLatest" style="font-size:15px">—</div><div class="sub">最近写入</div></div>
     </div>
     <div class="grid g2">
-      <div class="card"><h3>lottery_info 明细</h3><table><tbody id="infoTb"></tbody></table></div>
+      <div class="card"><h3>待参与抽奖明细</h3><table><tbody id="infoTb"></tbody></table></div>
       <div class="card">
-        <h3>dyid 查询</h3>
-        <div class="row"><input type="text" id="dSearch" placeholder="粘贴或输入 dyid 片段，回车查询"><button class="btn sm" id="dClean">清理过期数据</button></div>
+        <h3>动态 ID 查询</h3>
+        <div class="row"><input type="text" id="dSearch" placeholder="粘贴或输入动态 ID 片段，回车查询"><button class="btn sm" id="dClean">清理过期数据</button></div>
         <div class="row" style="margin-top:8px">
-          <a class="btn sm" href="/panel/download?file=data/dyids/dyid.txt">导出 dyid.txt</a>
-          <a class="btn sm" href="/panel/download?file=my_config.js">导出 my_config.js</a>
+          <a class="btn sm" href="/panel/download?file=data/dyids/dyid.txt">导出动态 ID 清单</a>
+          <a class="btn sm" href="/panel/download?file=my_config.js">导出配置源码</a>
           <a class="btn sm" href="/panel/download?file=logs/lottery-run.log">导出运行日志</a>
         </div>
         <div class="sub" id="dSearchMsg" style="margin-top:8px">—</div>
@@ -212,7 +212,7 @@ tr:last-child td{border-bottom:0}
       <div class="card">
         <h3>B站账号</h3>
         <div class="sub" style="margin-bottom:8px">解析自 env.js 的 account_parm；Cookie 不外传，只显示长度与关键字段是否齐全。</div>
-        <table><thead><tr><th style="width:44px">#</th><th>备注 / UID</th><th style="width:78px">CLEAR</th><th style="width:96px">Cookie</th></tr></thead>
+        <table><thead><tr><th style="width:44px">#</th><th>备注 / UID</th><th style="width:86px">清理功能</th><th style="width:118px">Cookie 状态</th></tr></thead>
           <tbody id="acctTb"></tbody></table>
         <div class="sub" id="acctFlags" style="margin-top:10px">—</div>
       </div>
@@ -491,7 +491,8 @@ async function loadLogs(){
   const sel=$('#logFile'), want=sel.value||'lottery-run.log';
   const d=await api('/panel/logs?file='+encodeURIComponent(want)+'&lines=500');
   if((d.files||[]).join()!==[...sel.options].map(o=>o.value).join()){
-    sel.innerHTML=(d.files||['lottery-run.log']).map(f=>`<option value="${f}">${f}</option>`).join('');
+    const FILE_ZH={'lottery-run.log':'抽奖运行','winner-check.log':'中奖检测','clear.log':'动态清理','cleanup.log':'数据清理','panel-audit.log':'面板操作审计'};
+    sel.innerHTML=(d.files||['lottery-run.log']).map(f=>`<option value="${f}">${(FILE_ZH[f]||f)+'（'+f+'）'}</option>`).join('');
     sel.value=want;
   }
   const kw=($('#logFilter').value||'').trim();
@@ -576,17 +577,18 @@ function textToList(txt, wasQuoted){
 
 function fieldControl(f){
   const k=f.key, raw=f.raw;
+  const NAME = `<b style="font-weight:500">${f.label||k}</b><span class="mono" style="color:#a1a1aa;font-size:11px">${k}</span>`;
   if(f.kind==='bool'){
-    return `<label><input type="checkbox" data-key="${k}" data-kind="bool" data-raw="${raw}" ${raw==='true'?'checked':''}> ${k}<span class="tagc">bool</span></label>`;
+    return `<label><input type="checkbox" data-key="${k}" data-kind="bool" data-raw="${raw}" ${raw==='true'?'checked':''}> ${NAME}<span class="tagc">开关</span></label>`;
   }
   if(f.kind==='num'||f.kind==='expr'){
-    return `<label>${k}<input type="text" data-key="${k}" data-kind="${f.kind}" data-raw="${raw.replace(/"/g,'&quot;')}" value="${raw.replace(/"/g,'&quot;')}"><span class="tagc">${f.kind==='num'?'数字':'表达式'}</span></label>`;
+    return `<label>${NAME}<input type="text" data-key="${k}" data-kind="${f.kind}" data-raw="${raw.replace(/"/g,'&quot;')}" value="${raw.replace(/"/g,'&quot;')}" title="${k}"><span class="tagc">${f.kind==='num'?'数字':'表达式'}</span></label>`;
   }
   if(f.kind==='list'){
-    return `<label>${k}<input type="text" data-key="${k}" data-kind="list" data-raw="${raw.replace(/"/g,'&quot;')}" value="${listToText(raw).replace(/"/g,'&quot;')}"><span class="tagc">数组</span></label>`;
+    return `<label>${NAME}<input type="text" data-key="${k}" data-kind="list" data-raw="${raw.replace(/"/g,'&quot;')}" value="${listToText(raw).replace(/"/g,'&quot;')}" title="${k}"><span class="tagc">数组</span></label>`;
   }
   const val = raw.replace(/^['"]|['"]$/g,'');
-  return `<label>${k}<input type="text" data-key="${k}" data-kind="str" data-raw="${raw.replace(/"/g,'&quot;')}" value="${val.replace(/"/g,'&quot;')}"><span class="tagc">文本</span></label>`;
+  return `<label>${NAME}<input type="text" data-key="${k}" data-kind="str" data-raw="${raw.replace(/"/g,'&quot;')}" value="${val.replace(/"/g,'&quot;')}" title="${k}"><span class="tagc">文本</span></label>`;
 }
 
 async function loadForm(){

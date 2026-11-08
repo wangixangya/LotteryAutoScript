@@ -268,9 +268,6 @@ def winners():
         key = (date, tm, msg)
         if key in seen:
             continue
-        # 嵌套数组/对象（如 at_users: [[名字, uid], ...]）表单改不了，交给源码模式
-        if _kind(raw) == "list" and ("[" in raw[1:] or "{" in raw):
-            continue
         if ("可能中奖" in tag) or ("可能中奖" in msg) or ("中奖了" in msg) or ("恭喜" in msg):
             seen.add(key)
             out.append({"time": f"{date} {tm}", "level": lvl, "tag": tag, "msg": msg[:120]})
@@ -412,6 +409,31 @@ def _kind(raw):
     return "expr"
 
 
+# ---------- 字段中文名 ----------
+LABELS = {
+    "UIDs": "关注的 UP 主 UID", "TAGs": "抽奖 TAG 标签", "Articles": "指定动态 ID",
+    "APIs": "抽奖信息来源（文件/接口）", "TxT": "dyid 文本文件", "blacklist": "黑名单 UP 主",
+    "blockword": "屏蔽关键词", "LotteryOrder": "抽奖顺序", "check_if_duplicated": "查重开关（1 开）",
+    "maxday": "抽奖最大天数", "max_create_time": "动态最大发布时长", "disable_reserve_lottery": "关闭预约抽奖",
+    "is_not_relay_reserve_lottery": "预约抽奖不转发", "sneaktower": "隐藏楼层抽奖", "is_imitator": "模仿者模式",
+    "only_followed": "只参与已关注", "minfollower": "UP 主最低粉丝数", "save_lottery_info_to_file": "保存抽奖信息到文件",
+    "set_lottery_info_url": "抽奖信息接口地址", "uid_scan_page": "关注列表扫描页数", "tag_scan_page": "TAG 扫描页数",
+    "article_scan_page": "动态扫描页数", "article_create_time": "动态时限（天）", "not_check_article": "不检查动态",
+    "check_session_pages": "会话检查页数", "partition_id": "分区 ID", "wait": "主循环等待（毫秒）",
+    "search_wait": "搜索等待", "get_session_wait": "获取会话等待", "update_session_wait": "更新会话等待",
+    "get_partition_wait": "获取分区等待", "get_dynamic_detail_wait": "动态详情等待（区间）", "filter_wait": "过滤等待",
+    "random_dynamic_wait": "随机动态等待（区间）", "reserve_lottery_wait": "预约抽奖等待",
+    "lottery_loop_wait": "抽奖循环等待", "check_loop_wait": "检测循环等待", "clear_loop_wait": "清理循环等待",
+    "create_dy": "自动发动态", "create_dy_type": "动态类型", "create_dy_num": "发动态数量",
+    "is_repost_then_chat": "转发后评论", "relay": "转发附带文案", "is_copy_chat": "复制他人评论",
+    "copy_blockword": "评论复制屏蔽词", "is_not_create_partition": "不新建分区", "clear_max_day": "清理保留天数",
+    "clear_remove_dynamic": "删除旧动态", "clear_remove_attention": "同时取关", "clear_remove_delay": "清理间隔（毫秒）",
+    "clear_dynamic_type": "清理动态类型", "clear_white_list": "清理白名单", "clear_partition": "清理分区",
+    "clear_quick_remove_attention": "快速取关", "clear_quick_remove_attention_fans_number_smallest": "快速取关粉丝数下限",
+    "model": "文本模型编号", "chatmodel": "评论模型编号", "block_dynamic_type": "屏蔽动态类型",
+    "is_exception": "异常模式", "is_outof_maxfollow": "超出关注上限", "notice_running_state": "推送运行状态",
+}
+
 def cfg_fields():
     """解析 default_config 块里的顶层标量/单行数组字段（多行对象/数组不参与表单，走源码模式）。"""
     lines = rd(os.path.join(LOTTERY, "my_config.js")).splitlines()
@@ -444,7 +466,7 @@ def cfg_fields():
         # 嵌套数组/对象（at_users: [[名字, uid], ...]、create_dy_mode: [[0],[0]]）表单改不了，交给源码模式
         if kind == "list" and ("[" in raw[1:] or "{" in raw):
             continue
-        fields.append({"key": key, "raw": raw, "kind": kind, "line": i})
+        fields.append({"key": key, "label": LABELS.get(key, key), "raw": raw, "kind": kind, "line": i})
     return {"ok": True, "fields": fields}
 
 
